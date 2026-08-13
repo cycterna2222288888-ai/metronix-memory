@@ -260,6 +260,7 @@ class User:
     role: Role = Role.VIEWER
     workspace_ids: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
+    must_change_password: bool = False
 
 
 @dataclass
