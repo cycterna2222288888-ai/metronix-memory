@@ -45,6 +45,7 @@ class UserStore:
                         display_name  TEXT NOT NULL DEFAULT '',
                         role          TEXT NOT NULL DEFAULT 'viewer',
                         is_active     BOOLEAN NOT NULL DEFAULT true,
+                        must_change_password BOOLEAN NOT NULL DEFAULT false,
                         created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at    TIMESTAMPTZ
                     )
@@ -59,6 +60,7 @@ class UserStore:
                     ("is_active", "BOOLEAN NOT NULL DEFAULT true"),
                     ("updated_at", "TIMESTAMPTZ"),
                     ("owui_user_id", "TEXT"),
+                    ("must_change_password", "BOOLEAN NOT NULL DEFAULT false"),
                 ]:
                     # IF NOT EXISTS guards the column, but legacy PG versions
                     # may still raise — swallow harmlessly.
@@ -97,7 +99,8 @@ class UserStore:
                         is_active     INTEGER NOT NULL DEFAULT 1,
                         created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                         updated_at    TEXT,
-                        owui_user_id  TEXT
+                        owui_user_id  TEXT,
+                        must_change_password INTEGER NOT NULL DEFAULT 0
                     )
                 """)
                 )
@@ -122,14 +125,19 @@ class UserStore:
         display_name: str = "",
         role: str = "viewer",
         workspace_ids: list[str] | None = None,
+        must_change_password: bool = False,
     ) -> dict[str, Any]:
         user_id = str(uuid4())
         pw_hash = hash_password(password)
         async with self._engine.begin() as conn:
             await conn.execute(
                 text("""
-                    INSERT INTO users (id, username, email, password_hash, display_name, role)
-                    VALUES (:id, :username, :email, :pw_hash, :display_name, :role)
+                    INSERT INTO users
+                        (id, username, email, password_hash, display_name, role,
+                         must_change_password)
+                    VALUES
+                        (:id, :username, :email, :pw_hash, :display_name, :role,
+                         :must_change_password)
                 """),
                 {
                     "id": user_id,
@@ -138,6 +146,7 @@ class UserStore:
                     "pw_hash": pw_hash,
                     "display_name": display_name,
                     "role": role,
+                    "must_change_password": must_change_password,
                 },
             )
             for ws_id in workspace_ids or []:
@@ -155,6 +164,7 @@ class UserStore:
             "display_name": display_name,
             "role": role,
             "is_active": True,
+            "must_change_password": must_change_password,
             "workspace_ids": workspace_ids or [],
         }
 
@@ -163,7 +173,7 @@ class UserStore:
             row = (
                 await conn.execute(
                     text(
-                        "SELECT id, email, password_hash, display_name, role, is_active, created_at FROM users WHERE email = :email"  # noqa: E501
+                        "SELECT id, email, password_hash, display_name, role, is_active, must_change_password, created_at FROM users WHERE email = :email"  # noqa: E501
                     ),
                     {"email": email},
                 )
@@ -179,7 +189,7 @@ class UserStore:
             row = (
                 await conn.execute(
                     text(
-                        "SELECT id, email, display_name, role, is_active, created_at, updated_at, owui_user_id FROM users WHERE id = :id"  # noqa: E501
+                        "SELECT id, email, display_name, role, is_active, must_change_password, created_at, updated_at, owui_user_id FROM users WHERE id = :id"  # noqa: E501
                     ),
                     {"id": user_id},
                 )
@@ -199,7 +209,7 @@ class UserStore:
             total_row = (await conn.execute(text("SELECT COUNT(*) FROM users"))).scalar()
             rows = await conn.execute(
                 text(
-                    "SELECT id, email, display_name, role, is_active, created_at FROM users ORDER BY created_at LIMIT :limit OFFSET :offset"  # noqa: E501
+                    "SELECT id, email, display_name, role, is_active, must_change_password, created_at FROM users ORDER BY created_at LIMIT :limit OFFSET :offset"  # noqa: E501
                 ),
                 {"limit": limit, "offset": offset},
             )
@@ -216,7 +226,15 @@ class UserStore:
         # Handle password separately
         if "password" in fields:
             fields["password_hash"] = hash_password(fields.pop("password"))
-        allowed = {"email", "password_hash", "display_name", "role", "is_active", "owui_user_id"}
+        allowed = {
+            "email",
+            "password_hash",
+            "display_name",
+            "role",
+            "is_active",
+            "owui_user_id",
+            "must_change_password",
+        }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return await self.get_user_by_id(user_id)
@@ -301,6 +319,7 @@ class UserStore:
                 password=password,
                 display_name="Admin",
                 role="admin",
+                must_change_password=True,
             )
         except Exception:
             # Another replica already created the admin — not an error
