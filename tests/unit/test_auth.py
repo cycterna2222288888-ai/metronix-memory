@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from metronix.auth.dependencies import _user_from_claims
 from metronix.auth.jwt import create_token, verify_token
 from metronix.auth.rbac import check_permission, require_role
 from metronix.core.exceptions import AuthenticationError
@@ -36,6 +37,28 @@ class TestJWT:
         token = create_token("user_1", "viewer", [], SECRET, expiry_hours=24)
         payload = verify_token(token, SECRET)
         assert payload["sub"] == "user_1"
+
+    def test_must_change_password_round_trips_through_payload(self) -> None:
+        token = create_token("user_1", "admin", [], SECRET, must_change_password=True)
+        payload = verify_token(token, SECRET)
+        assert payload["must_change_password"] is True
+
+    def test_must_change_password_defaults_to_false(self) -> None:
+        token = create_token("user_1", "viewer", [], SECRET)
+        payload = verify_token(token, SECRET)
+        assert payload["must_change_password"] is False
+
+
+class TestUserFromClaims:
+    def test_must_change_password_claim_carries_through_to_user(self) -> None:
+        user = _user_from_claims({"sub": "user_1", "role": "viewer", "must_change_password": True})
+        assert user.must_change_password is True
+
+    def test_legacy_token_without_claim_defaults_to_false(self) -> None:
+        # Tokens issued before this claim existed have no must_change_password
+        # key at all — must_change_password must default to False, not error.
+        user = _user_from_claims({"sub": "user_1", "role": "viewer"})
+        assert user.must_change_password is False
 
 
 class TestRBAC:

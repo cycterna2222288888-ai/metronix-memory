@@ -26,6 +26,7 @@ def create_token(
     secret_key: str,
     expiry_hours: int = DEFAULT_EXPIRY_HOURS,
     email: str = "",
+    must_change_password: bool = False,
 ) -> str:
     """Create a signed JWT token.
 
@@ -35,6 +36,8 @@ def create_token(
         workspace_ids: List of workspace IDs the user can access.
         secret_key: HMAC signing key.
         expiry_hours: Token lifetime in hours.
+        must_change_password: Whether the account must change its password
+            before it can use the rest of the API.
 
     Returns:
         Encoded JWT string.
@@ -44,6 +47,7 @@ def create_token(
         "sub": user_id,
         "role": role,
         "workspace_ids": workspace_ids,
+        "must_change_password": must_change_password,
         "iat": now,
         "exp": now + timedelta(hours=expiry_hours),
     }

@@ -47,6 +47,10 @@ def _user_from_claims(payload: dict[str, object]) -> User:
         email=str(payload.get("email", "")),
         role=role,
         workspace_ids=workspace_ids,
+        # Legacy tokens issued before this claim existed carry no
+        # must_change_password key at all — treat that as False rather
+        # than forcing every already-issued session into the gate.
+        must_change_password=bool(payload.get("must_change_password", False)),
     )
 
 
