@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from metronix.auth.jwt import create_token
-from metronix.auth.passwords import verify_password
+from metronix.auth.passwords import validate_password, verify_password
 from metronix.core.config import get_settings
 
 logger = structlog.get_logger()
@@ -26,6 +26,16 @@ class LoginResponse(BaseModel):
     email: str = ""
     display_name: str = ""
     role: str
+    must_change_password: bool = False
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ChangePasswordResponse(BaseModel):
+    token: str
 
 
 @router.post("/auth/login", response_model=LoginResponse)
@@ -54,6 +64,7 @@ async def login(req: LoginRequest, request: Request) -> LoginResponse:
     # for older tokens already in circulation).
     if user["role"] == "admin" and not workspace_ids:
         workspace_ids = ["*"]
+    must_change_password = bool(user.get("must_change_password", False))
     token = create_token(
         user_id=user["id"],
         role=user["role"],
@@ -61,6 +72,7 @@ async def login(req: LoginRequest, request: Request) -> LoginResponse:
         secret_key=settings.secret_key,
         expiry_hours=24,
         email=user["email"],
+        must_change_password=must_change_password,
     )
     logger.info("auth.login.success", user_id=user["id"], email=user["email"])
     return LoginResponse(
@@ -69,6 +81,7 @@ async def login(req: LoginRequest, request: Request) -> LoginResponse:
         email=user["email"],
         display_name=user.get("display_name", ""),
         role=user["role"],
+        must_change_password=must_change_password,
     )
 
 
@@ -81,4 +94,57 @@ def me(request: Request) -> dict:
         "user_id": user.get("user_id", ""),
         "email": user.get("email", ""),
         "role": user.get("role", ""),
+        "must_change_password": user.get("must_change_password", False),
     }
+
+
+@router.post("/auth/change-password", response_model=ChangePasswordResponse)
+async def change_password(req: ChangePasswordRequest, request: Request) -> ChangePasswordResponse:
+    """Change the caller's own password and clear the must-change-password flag.
+
+    Requires a valid Bearer token (enforced by OptionalAuthMiddleware for every
+    non-public path when AUTH_ENABLED=true). Re-verifies the current password
+    against the stored hash before allowing the change, then issues a fresh
+    token so the caller doesn't need to log in again.
+    """
+    settings = get_settings()
+
+    caller = getattr(request.state, "user", {})
+    user_id = caller.get("user_id", "")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user_store = getattr(request.app.state, "user_store", None)
+    if not user_store:
+        raise HTTPException(status_code=500, detail="User store not available")
+
+    record = await user_store.get_user_by_email(caller.get("email", ""))
+    if (
+        not record
+        or not record.get("password_hash")
+        or not verify_password(req.current_password, record["password_hash"])
+    ):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    try:
+        validate_password(req.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await user_store.update_user(
+        user_id,
+        password=req.new_password,
+        must_change_password=False,
+    )
+
+    token = create_token(
+        user_id=user_id,
+        role=record["role"],
+        workspace_ids=caller.get("workspace_ids", []) or [],
+        secret_key=settings.secret_key,
+        expiry_hours=24,
+        email=caller.get("email", ""),
+        must_change_password=False,
+    )
+    logger.info("auth.change_password.success", user_id=user_id)
+    return ChangePasswordResponse(token=token)

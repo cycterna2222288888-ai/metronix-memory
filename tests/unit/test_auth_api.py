@@ -55,12 +55,18 @@ def client_auth(settings_auth_on: Settings) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _make_token(secret: str = "test-secret") -> str:
+def _make_token(
+    secret: str = "test-secret",
+    email: str = "",
+    must_change_password: bool = False,
+) -> str:
     return create_token(
         user_id="admin",
         role="admin",
         workspace_ids=["*"],
         secret_key=secret,
+        email=email,
+        must_change_password=must_change_password,
     )
 
 
@@ -71,6 +77,7 @@ ADMIN_USER = {
     "password_hash": "hashed-testpass",
     "is_active": True,
     "workspace_ids": ["*"],
+    "must_change_password": False,
 }
 
 
@@ -79,11 +86,18 @@ class _FakeUserStore:
 
     def __init__(self, user: dict | None = ADMIN_USER) -> None:
         self._user = user
+        self.updated: dict | None = None
 
     async def get_user_by_email(self, email: str) -> dict | None:
         if self._user and email == self._user["email"]:
-            return self._user
+            return dict(self._user)
         return None
+
+    async def update_user(self, user_id: str, **fields: object) -> dict | None:
+        self.updated = {"user_id": user_id, **fields}
+        if self._user:
+            self._user = {**self._user, **{k: v for k, v in fields.items() if k != "password"}}
+        return dict(self._user) if self._user else None
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +150,20 @@ class TestLogin:
         assert r.status_code == 401
         assert "Invalid email or password" in r.json()["detail"]
 
+    @patch("metronix.api.routes.auth.verify_password", return_value=True)
+    @patch("metronix.api.routes.auth.get_settings")
+    def test_login_returns_must_change_password_flag(
+        self, mock_settings, mock_verify, client: TestClient, settings: Settings
+    ) -> None:
+        mock_settings.return_value = settings
+        client.app.state.user_store = _FakeUserStore({**ADMIN_USER, "must_change_password": True})
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": "admin@metronix.local", "password": "testpass"},
+        )
+        assert r.status_code == 200
+        assert r.json()["must_change_password"] is True
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/auth/me
@@ -150,6 +178,94 @@ class TestMe:
         body = r.json()
         assert body["user_id"] == "admin"
         assert body["role"] == "admin"
+
+    def test_me_returns_must_change_password_flag(self, client_auth: TestClient) -> None:
+        token = _make_token(email="admin@metronix.local", must_change_password=True)
+        r = client_auth.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["must_change_password"] is True
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/auth/change-password
+# ---------------------------------------------------------------------------
+
+
+class TestChangePassword:
+    @patch("metronix.api.routes.auth.verify_password", return_value=False)
+    @patch("metronix.api.routes.auth.get_settings")
+    def test_wrong_current_password_returns_401(
+        self,
+        mock_settings,
+        mock_verify,
+        client_auth: TestClient,
+        settings_auth_on: Settings,
+    ) -> None:
+        mock_settings.return_value = settings_auth_on
+        client_auth.app.state.user_store = _FakeUserStore()
+        token = _make_token(email="admin@metronix.local")
+        r = client_auth.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": "wrong", "new_password": "NewStrongPass123"},
+        )
+        assert r.status_code == 401
+        assert "Current password is incorrect" in r.json()["detail"]
+
+    @patch("metronix.api.routes.auth.verify_password", return_value=True)
+    @patch("metronix.api.routes.auth.get_settings")
+    def test_weak_new_password_returns_error(
+        self,
+        mock_settings,
+        mock_verify,
+        client_auth: TestClient,
+        settings_auth_on: Settings,
+    ) -> None:
+        mock_settings.return_value = settings_auth_on
+        client_auth.app.state.user_store = _FakeUserStore()
+        token = _make_token(email="admin@metronix.local")
+        r = client_auth.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": "testpass", "new_password": "short"},
+        )
+        assert r.status_code == 400
+
+    @patch("metronix.api.routes.auth.verify_password", return_value=True)
+    @patch("metronix.api.routes.auth.get_settings")
+    def test_successful_change_returns_new_token(
+        self,
+        mock_settings,
+        mock_verify,
+        client_auth: TestClient,
+        settings_auth_on: Settings,
+    ) -> None:
+        mock_settings.return_value = settings_auth_on
+        store = _FakeUserStore()
+        client_auth.app.state.user_store = store
+        token = _make_token(email="admin@metronix.local", must_change_password=True)
+        r = client_auth.post(
+            "/api/v1/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": "testpass", "new_password": "NewStrongPass123"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "token" in body
+        assert body["token"] != token
+        assert store.updated is not None
+        assert store.updated["password"] == "NewStrongPass123"
+        assert store.updated["must_change_password"] is False
+
+    def test_no_auth_returns_401(self, client_auth: TestClient) -> None:
+        r = client_auth.post(
+            "/api/v1/auth/change-password",
+            json={"current_password": "testpass", "new_password": "NewStrongPass123"},
+        )
+        assert r.status_code == 401
 
 
 # ---------------------------------------------------------------------------

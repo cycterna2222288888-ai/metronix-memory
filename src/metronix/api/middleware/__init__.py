@@ -129,6 +129,7 @@ class OptionalAuthMiddleware(BaseHTTPMiddleware):
                 "role": "admin",
                 "workspace_ids": ["*"],
                 "email": "",
+                "must_change_password": False,
             }
             return await call_next(request)
 
@@ -165,6 +166,7 @@ class OptionalAuthMiddleware(BaseHTTPMiddleware):
             "role": user.role.value,
             "workspace_ids": user.workspace_ids,
             "email": user.email,
+            "must_change_password": user.must_change_password,
         }
 
         return await call_next(request)
