@@ -3,6 +3,7 @@ export { apiFetch } from './api/client';
 export { ApiError } from './api/errors';
 export {
   login,
+  changePassword,
   getToken,
   setToken,
   clearToken,
@@ -22,6 +23,9 @@ export { getHealth, getReady, getMetrics } from './api/health';
 export type {
   LoginRequest,
   LoginResponse,
+  MeResponse,
+  ChangePasswordRequest,
+  ChangePasswordResponse,
   WorkspaceResponse,
   WorkspaceListResponse,
   WorkspaceCreate,

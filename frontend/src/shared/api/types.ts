@@ -10,6 +10,24 @@ export interface LoginResponse {
   email: string;
   display_name: string;
   role: string;
+  must_change_password: boolean;
+}
+
+export interface MeResponse {
+  status: string;
+  user_id: string;
+  email: string;
+  role: string;
+  must_change_password: boolean;
+}
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export interface ChangePasswordResponse {
+  token: string;
 }
 
 // Workspaces
