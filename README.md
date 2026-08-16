@@ -156,7 +156,7 @@ Flags: `--mode memory|answers`, `--chat-url`, `--chat-model`, `--chat-api-key`, 
 
 *Prefer manual setup? Continue with step 2 below.*
 
-### 2. Configure: set the local MCP key in `.env`
+### 2. Configure: set the required keys in `.env`
 
 ```bash
 cp .env.example .env
@@ -169,7 +169,13 @@ a JWT obtained from the Metronix administrator instead. Embeddings for ingest co
 
 ```bash
 METRONIX_MCP_API_KEY=...   # generate: openssl rand -hex 32
+FERNET_KEY=...             # generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
+
+Both are required. `FERNET_KEY` encrypts connector credentials — without it, `metronix_source_create`
+fails for every source. The MCP client sees a generic `INTERNAL_ERROR` code either way, but the
+`message` field is descriptive: `metronix_source_create: FERNET_KEY not configured. Set the
+FERNET_KEY env var.`
 
 Optional — only if you run **Open WebUI** or want Metronix to generate answers itself:
 
