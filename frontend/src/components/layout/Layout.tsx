@@ -7,6 +7,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/sources': 'Sources',
   '/health': 'Health & Stats',
   '/access-keys': 'Access Keys',
+  '/settings': 'Settings',
 };
 
 export default function Layout() {

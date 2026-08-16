@@ -8,6 +8,7 @@ import SourcesPage from './components/sources/SourcesPage';
 import HealthPage from './components/health/HealthPage';
 import MemoryInspectorPage from './components/memory/MemoryInspectorPage';
 import AccessKeysPage from './components/access-keys/AccessKeysPage';
+import SettingsPage from './components/settings/SettingsPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +36,7 @@ export default function App() {
             <Route path="memory" element={<MemoryInspectorPage />} />
             <Route path="health" element={<HealthPage />} />
             <Route path="access-keys" element={<AccessKeysPage />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/sources" replace />} />
           </Route>
         </Routes>

@@ -1,4 +1,4 @@
-import { Database, Brain, Activity, KeyRound, X, LogOut } from 'lucide-react';
+import { Database, Brain, Activity, KeyRound, Settings, X, LogOut } from 'lucide-react';
 import { NavLink } from 'react-router';
 import { WorkspaceSelector, StatusDot, useHealth, clearToken, useAuthStore } from '@/shared';
 
@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { to: '/memory', label: 'Memory Inspector', icon: Brain },
   { to: '/health', label: 'Health & Stats', icon: Activity },
   { to: '/access-keys', label: 'Access Keys', icon: KeyRound },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
 export default function Sidebar({ open, onClose }: SidebarProps) {
