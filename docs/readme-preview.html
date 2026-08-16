@@ -192,8 +192,8 @@ if __name__ == "__main__":
 <hr>
 <h2>Web Console (KB Admin)</h2>
 <p>The optional <strong>KB Admin Console</strong> is the open-source web UI for administering Metronix: add and sync <strong>data connectors</strong> (Jira, Confluence, GitHub, Google Drive, Notion, Slack), register <strong>chat-bot channels</strong> (Telegram, Discord, Slack), upload files, and watch service and database health. It is presentation-only — everything runs through the <code>metronix-core</code> REST API.</p>
-<p>It ships as an optional service behind the <code>kb</code> Docker Compose profile:</p>
-<pre><code>docker compose --profile kb up -d --build   # → http://localhost:3000</code></pre>
+<p>It ships as an optional service behind the <code>admin</code> Docker Compose profile:</p>
+<pre><code>docker compose --profile admin up -d --build   # → http://localhost:3000</code></pre>
 <p>See <a href="frontend/README.md">frontend/README.md</a> for development, build, and configuration details.</p>
 <blockquote><p>The full operational <strong>Control Center</strong> (agent registry, workflow builder, memory inspector,</p><p>FinOps) is a separate product and is not part of this repository.</p></blockquote>
 <hr>
@@ -218,7 +218,7 @@ make eval             # search quality eval</code></pre>
 <p>External ports from <code>docker-compose.yml</code>:</p>
 <table><thead><tr><th>Service</th><th>Port</th></tr></thead><tbody><tr><td>API</td><td><code>8000</code></td></tr><tr><td>PostgreSQL</td><td><code>5433</code></td></tr><tr><td>Qdrant HTTP</td><td><code>6335</code></td></tr><tr><td>Qdrant gRPC</td><td><code>6336</code></td></tr><tr><td>Neo4j HTTP</td><td><code>7475</code></td></tr><tr><td>Neo4j bolt</td><td><code>7688</code></td></tr><tr><td>Redis</td><td><code>6380</code></td></tr><tr><td>Ollama</td><td><code>11435</code></td></tr><tr><td>SPLADE</td><td><code>8080</code></td></tr><tr><td>Embedding proxy</td><td><code>8002</code></td></tr><tr><td>Open WebUI</td><td><code>3080</code></td></tr></tbody></table>
 <h3>Important URLs</h3>
-<table><thead><tr><th>Surface</th><th>URL</th></tr></thead><tbody><tr><td>API health</td><td><code>http://localhost:8000/health</code></td></tr><tr><td>REST API</td><td><code>http://localhost:8000/api/v1/*</code></td></tr><tr><td>MCP endpoint</td><td><code>http://localhost:8000/mcp</code> (<code>metronix-full-api</code> / <code>metronix-core:8000</code> + <code>/mcp</code>)</td></tr><tr><td>OpenAI-compatible API</td><td><code>http://localhost:8000/v1</code></td></tr><tr><td>KB Admin Console</td><td><code>http://localhost:3000</code> (profile <code>kb</code>)</td></tr><tr><td>Open WebUI</td><td><code>http://localhost:3080</code> (profile <code>openwebui</code>)</td></tr></tbody></table>
+<table><thead><tr><th>Surface</th><th>URL</th></tr></thead><tbody><tr><td>API health</td><td><code>http://localhost:8000/health</code></td></tr><tr><td>REST API</td><td><code>http://localhost:8000/api/v1/*</code></td></tr><tr><td>MCP endpoint</td><td><code>http://localhost:8000/mcp</code> (<code>metronix-full-api</code> / <code>metronix-core:8000</code> + <code>/mcp</code>)</td></tr><tr><td>OpenAI-compatible API</td><td><code>http://localhost:8000/v1</code></td></tr><tr><td>KB Admin Console</td><td><code>http://localhost:3000</code> (profile <code>admin</code>)</td></tr><tr><td>Open WebUI</td><td><code>http://localhost:3080</code> (profile <code>openwebui</code>)</td></tr></tbody></table>
 <p>Useful commands:</p>
 <pre><code>docker compose logs metronix-core
 docker compose down
