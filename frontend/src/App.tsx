@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
-import { isAuthenticated, LoginPage } from '@/shared';
+import { isAuthenticated, LoginPage, useAuthStore } from '@/shared';
 import Layout from './components/layout/Layout';
 import SourcesPage from './components/sources/SourcesPage';
 import HealthPage from './components/health/HealthPage';
@@ -21,6 +21,7 @@ const queryClient = new QueryClient({
 
 export default function App() {
   const [authed, setAuthed] = useState(isAuthenticated());
+  const mustChangePassword = useAuthStore((s) => s.mustChangePassword);
 
   if (!authed) {
     return <LoginPage onSuccess={() => setAuthed(true)} />;
@@ -31,13 +32,22 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<Navigate to="/sources" replace />} />
-            <Route path="sources" element={<SourcesPage />} />
-            <Route path="memory" element={<MemoryInspectorPage />} />
-            <Route path="health" element={<HealthPage />} />
-            <Route path="access-keys" element={<AccessKeysPage />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/sources" replace />} />
+            {mustChangePassword ? (
+              <>
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/settings" replace />} />
+              </>
+            ) : (
+              <>
+                <Route index element={<Navigate to="/sources" replace />} />
+                <Route path="sources" element={<SourcesPage />} />
+                <Route path="memory" element={<MemoryInspectorPage />} />
+                <Route path="health" element={<HealthPage />} />
+                <Route path="access-keys" element={<AccessKeysPage />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/sources" replace />} />
+              </>
+            )}
           </Route>
         </Routes>
       </BrowserRouter>

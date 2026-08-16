@@ -28,6 +28,7 @@ export default function LoginPage({ onSuccess }: LoginPageProps) {
       const res = await login(email, password);
       setToken(res.token);
       useAuthStore.getState().setAuth(res.user_id, res.role, res.email, res.display_name);
+      useAuthStore.getState().setMustChangePassword(res.must_change_password);
       onSuccess();
     } catch {
       setError('Invalid email or password');
