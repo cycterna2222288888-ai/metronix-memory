@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import PasswordWarningBanner from './PasswordWarningBanner';
 
 const ROUTE_TITLES: Record<string, string> = {
   '/sources': 'Sources',
@@ -26,6 +27,7 @@ export default function Layout() {
           title={title}
           onMenuClick={() => setSidebarOpen(true)}
         />
+        <PasswordWarningBanner />
         <main className="flex-1 overflow-hidden">
           <Outlet />
         </main>
