@@ -33,10 +33,15 @@ async def metronix_source_create(
     """Create a data-source connection."""
     try:
         from metronix.connectors.connection_sync import ensure_workspace_exists
-        from metronix.connectors.schemas import CONNECTOR_SCHEMAS, validate_config
+        from metronix.connectors.schemas import (
+            CONNECTOR_SCHEMAS,
+            resolve_connector_type,
+            validate_config,
+        )
         from metronix.mcp.tools._source_deps import resolve
         from metronix.mcp.tools.models import SourceDTO
 
+        connector_type = resolve_connector_type(connector_type)
         schema = CONNECTOR_SCHEMAS.get(connector_type)
         if schema is None:
             available = sorted(

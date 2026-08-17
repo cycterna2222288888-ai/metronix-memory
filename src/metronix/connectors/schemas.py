@@ -224,6 +224,30 @@ CONNECTOR_SCHEMAS: dict[str, ConnectorSchema] = {
 }
 
 
+CONNECTOR_ALIASES: dict[str, str] = {
+    "google_drive": "gdrive",
+}
+"""Alternate spellings accepted for a canonical connector type.
+
+Resolve with :func:`resolve_connector_type` at the point a caller-supplied
+``connector_type`` first enters the system (MCP tool / REST route), before
+it touches ``CONNECTOR_SCHEMAS`` or the connector registry. Everything
+downstream — schema lookup, config validation, the registry, and the stored
+``connections.connector_type`` DB column — only ever sees the canonical
+name, so existing ``gdrive`` connections and code paths are unaffected.
+"""
+
+
+def resolve_connector_type(connector_type: str) -> str:
+    """Map an alias to its canonical connector type, if one is registered.
+
+    Unknown names (including already-canonical ones) pass through unchanged;
+    the caller is still responsible for validating the result against
+    ``CONNECTOR_SCHEMAS``.
+    """
+    return CONNECTOR_ALIASES.get(connector_type, connector_type)
+
+
 def get_schema(connector_type: str) -> ConnectorSchema | None:
     """Get the schema for a connector type, or None if unknown."""
     return CONNECTOR_SCHEMAS.get(connector_type)
