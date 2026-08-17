@@ -83,7 +83,7 @@ The install is five steps:
 
 1. [Check prerequisites](#1-prerequisites)
 2. [Clone the repository](#2-clone-the-repository)
-3. [Configure](#3-configure-env) `.env` — set the MCP key (+ optional chat LLM if using Open WebUI)
+3. [Configure](#3-configure-env) `.env` — set the MCP key and Fernet key (+ optional chat LLM if using Open WebUI)
 4. [Launch the stack](#4-launch)
 5. [Verify](#5-verify)
 
@@ -147,15 +147,15 @@ cp .env.example .env
 ```
 
 For the usual path — **agent memory over MCP** (Hermes, Cursor, Claude Desktop, …) — you
-only need to set `**METRONIX_MCP_API_KEY`**. Embeddings for ingest run on the bundled Ollama
-container automatically (see [§3d](#3d-bundled-ollama-embeddings)); you do **not** need a chat
-LLM in `.env`.
+need to set **`METRONIX_MCP_API_KEY`** and **`FERNET_KEY`**. Embeddings for ingest run on the
+bundled Ollama container automatically (see [§3e](#3e-bundled-ollama-embeddings)); you do
+**not** need a chat LLM in `.env`.
 
 
 | Scenario                         | What to set in `.env`                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------- |
-| **Agent memory (MCP)** — default | `METRONIX_MCP_API_KEY` only                                                           |
-| **Open WebUI** ([§4](#4-launch)) | MCP key **+** chat LLM ([§3b](#3b-optional-chat-llm-open-webui-or-answer-generation)) |
+| **Agent memory (MCP)** — default | `METRONIX_MCP_API_KEY` + `FERNET_KEY`                                                 |
+| **Open WebUI** ([§4](#4-launch)) | MCP key + Fernet key **+** chat LLM ([§3c](#3c-optional-chat-llm-open-webui-or-answer-generation)) |
 | **Metronix generates answers**   | Same as Open WebUI — custom chat endpoint                                             |
 
 
@@ -197,7 +197,31 @@ path `/mcp`.
 
 
 
-### 3b. Optional: chat LLM (Open WebUI or answer generation)
+### 3b. Fernet key (required for sources)
+
+`FERNET_KEY` encrypts connector credentials at rest. The API boots fine without it, but
+every call to `metronix_source_create` (or any other connector-add path) fails as soon as
+it tries to encrypt a credential. The error `code` the MCP client sees is a generic
+`INTERNAL_ERROR` either way — only the `message` field is descriptive:
+`metronix_source_create: FERNET_KEY not configured. Set the FERNET_KEY env var.` Set it up
+front even if you don't plan to add a source immediately.
+
+Generate a key and set it in `.env`:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+```ini
+FERNET_KEY=<paste-the-generated-key>
+```
+
+Leave it blank only if you are certain you will never create a source — do **not** put a
+non-Fernet placeholder in its place; an invalid key crashes credential encryption instead of
+giving the clean "not configured" error. `./install.sh` generates this automatically; a
+manual install must set it by hand.
+
+### 3c. Optional: chat LLM (Open WebUI or answer generation)
 
 Configure this **only** if you will run **Open WebUI** ([§4](#4-launch)) or want Metronix
 itself to generate chat answers. For agent memory over MCP, **skip this section** — your
@@ -215,7 +239,7 @@ LLM_PROVIDER_MODEL=deepseek-chat   # model the endpoint serves (required)
 With `./install.sh`, use `--mode answers` plus `--chat-url`, `--chat-model`, and optionally
 `--chat-api-key` instead of editing by hand.
 
-### 3c. Neo4j authentication
+### 3d. Neo4j authentication
 
 Neo4j requires a username/password. On a **manual** install with unchanged `.env.example`,
 the defaults are:
@@ -228,7 +252,7 @@ not accept pre-hashed passwords. The `install.sh` script generates a random pass
 automatically; if you edit `.env` manually, ensure `NEO4J_PASSWORD` is set to a plain-text
 value and leave `NEO4J_AUTH` unset (or do not edit it).
 
-### 3d. Bundled Ollama (embeddings)
+### 3e. Bundled Ollama (embeddings)
 
 Docker Compose starts an **Ollama** container (`metronix-full-ollama`, host port **11435**)
 with the rest of the stack — no extra `.env` setup. On first launch its entrypoint runs
@@ -239,7 +263,7 @@ The entrypoint also pulls a small chat model — `qwen2.5:3b` (`OLLAMA_LLM_MODEL
 by default for **knowledge-graph extraction** (entity/relationship NER during ingest) and
 local answer generation, so a default install builds the graph with no external LLM. This
 is separate from the external answer-generation endpoint in
-[§3b](#3b-optional-chat-llm-open-webui-or-answer-generation). The first `docker compose up`
+[§3c](#3c-optional-chat-llm-open-webui-or-answer-generation). The first `docker compose up`
 may take extra time while both models download.
 
 Inside the Docker network the service is `ollama:11434`.
@@ -257,7 +281,7 @@ docker compose up -d --build
 ```
 
 **Backend + Open WebUI** — adds a browser chat interface at `http://localhost:3080`.
-Configure a chat LLM first ([§3b](#3b-optional-chat-llm-open-webui-or-answer-generation));
+Configure a chat LLM first ([§3c](#3c-optional-chat-llm-open-webui-or-answer-generation));
 Open WebUI calls Metronix's OpenAI-compatible API for answers and is useless without one.
 
 ```bash
