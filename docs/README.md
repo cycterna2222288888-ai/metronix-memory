@@ -24,6 +24,7 @@ Priority order:
 - [`integrations/langchain.md`](integrations/langchain.md)
 - [`integrations/sdk-python.md`](integrations/sdk-python.md)
 - [`integrations/sdk-go.md`](integrations/sdk-go.md)
+- [`integrations/sdk-js.md`](integrations/sdk-js.md)
 - [`integrations/n8n.md`](integrations/n8n.md)
 - [`integrations/nanoclaw.md`](integrations/nanoclaw.md)
 - [`integrations/nanobot.md`](integrations/nanobot.md)
