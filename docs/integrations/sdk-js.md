@@ -1,8 +1,30 @@
 # JavaScript/TypeScript SDK
 
+Call Metronix Memory from Node or a browser: OpenAI-compatible chat, REST, or MCP.
+
 > **MCP authentication mode:** Local `AUTH_ENABLED=false` MCP examples use
 > `METRONIX_MCP_API_KEY`. Hosted `AUTH_ENABLED=true` MCP clients use a user JWT instead;
 > the shared key is ignored.
+
+## Prerequisites
+
+- Metronix Memory running and accessible (`curl http://localhost:8000/health` returns OK)
+- Node.js 18+ for the REST/`/v1` examples below; **Node.js 20+** for the MCP example
+  (`@modelcontextprotocol/client@2.0.0` requires it)
+- The credential for whichever surface you're using: `METRONIX_OPENAI_COMPAT_KEY` for
+  `/v1`; nothing extra for REST in local trusted mode (`AUTH_ENABLED=false`, the
+  default) or a JWT/personal key in hosted mode; `METRONIX_MCP_API_KEY` for MCP
+  locally, or a user JWT when hosted (see the callout above)
+
+## Setup
+
+1. Get the backend running (see the [main README](../../README.md)) and confirm
+   `curl http://localhost:8000/health` returns `{"status":"ok"}`.
+2. Set the credential(s) for the surface(s) you're using in `.env` — see Prerequisites.
+3. For the MCP example, install the client:
+   ```bash
+   npm install @modelcontextprotocol/client
+   ```
 
 ## Recommended surfaces
 
@@ -93,21 +115,21 @@ console.log(await res.json());
 
 For tool-driven agent runtimes, use the official TypeScript SDK,
 [`@modelcontextprotocol/client`](https://www.npmjs.com/package/@modelcontextprotocol/client)
-(v2 — it replaces the older `@modelcontextprotocol/sdk` package):
-
-```bash
-npm install @modelcontextprotocol/client
-```
+(v2 — it replaces the older `@modelcontextprotocol/sdk` package; **requires Node.js
+20+**, see Prerequisites). Install it as shown in Setup, then:
 
 ```ts
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
+// Local (AUTH_ENABLED=false): set METRONIX_MCP_TOKEN to your METRONIX_MCP_API_KEY.
+// Hosted (AUTH_ENABLED=true): set it to a user JWT instead — the shared key is
+// ignored there (see the auth-mode callout above).
 const transport = new StreamableHTTPClientTransport(
   new URL('http://localhost:8000/mcp'),
   {
     requestInit: {
       headers: {
-        Authorization: `Bearer ${process.env.METRONIX_MCP_API_KEY}`,
+        Authorization: `Bearer ${process.env.METRONIX_MCP_TOKEN}`,
         'X-Agent-Id': 'js-quickstart-agent',
       },
     },
@@ -153,7 +175,7 @@ After setup, confirm the connection works:
 
 **Authentication errors on `/v1`:** Confirm the API key passed matches `METRONIX_OPENAI_COMPAT_KEY` in `.env`.
 
-**Authentication errors on `/mcp`:** Confirm the `Authorization: Bearer <key>` header matches `METRONIX_MCP_API_KEY` in `.env`, and that `X-Agent-Id` is included in every request.
+**Authentication errors on `/mcp`:** In local mode (`AUTH_ENABLED=false`), confirm the `Authorization: Bearer <key>` header matches `METRONIX_MCP_API_KEY` in `.env`. In hosted mode (`AUTH_ENABLED=true`), the shared key is ignored — pass a user JWT instead. Either way, confirm `X-Agent-Id` is included in every request.
 
 **CORS errors calling `/v1` or `/api/v1` from a browser:** These endpoints are meant for server-side or same-origin calls. Don't ship `METRONIX_OPENAI_COMPAT_KEY` or a personal API key to browser code — proxy the request through your own backend instead.
 
