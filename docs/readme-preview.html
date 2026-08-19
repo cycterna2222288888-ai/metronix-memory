@@ -119,9 +119,9 @@ LLM_PROVIDER_MODEL=deepseek-chat                # model the endpoint serves</cod
 <pre><code>docker compose up -d --build</code></pre>
 <h3>4. Verify</h3>
 <pre><code>curl http://localhost:8000/health</code></pre>
-<p>A healthy backend exposes the REST API, the OpenAI-compatible API at <code>:8000/v1</code>, and the MCP endpoint at <code>:8000/mcp</code> (default on the host: <code>http://localhost:8000/mcp</code> — the <code>metronix-full-api</code> container, path <code>/mcp</code>; from Docker network: <code>http://metronix-core:8000/mcp</code>). If you have installed the Metronix Admin Console (e.g. <a href="https://localhost:3000">https://localhost:3000</a>), log in with your Metronix credentials. Default credentials:</p>
-<pre><code>login: admin@metronix.local
-pass: metronix</code></pre>
+<p>A healthy backend exposes the REST API, the OpenAI-compatible API at <code>:8000/v1</code>, and the MCP endpoint at <code>:8000/mcp</code> (default on the host: <code>http://localhost:8000/mcp</code> — the <code>metronix-full-api</code> container, path <code>/mcp</code>; from Docker network: <code>http://metronix-core:8000/mcp</code>). If you have installed the Metronix Admin Console (e.g. <a href="https://localhost:3000">https://localhost:3000</a>, self-signed cert by default), log in with your Metronix credentials. Before the first launch, set a unique administrator password in <code>.env</code>; do not use a shared or default password:</p>
+<pre><code>AUTH_PASSWORD="$(openssl rand -base64 32)"</code></pre>
+<p>The seeded administrator email is <code>admin@metronix.local</code>.</p>
 <h3>5. Quick Validation</h3>
 <p>Verify the full memory lifecycle (store and retrieve) using either the REST API or the native MCP Streamable HTTP interface.</p>
 <h4>Option A: REST API</h4>
