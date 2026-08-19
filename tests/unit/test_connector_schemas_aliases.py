@@ -1,4 +1,4 @@
-from metronix.connectors.schemas import CONNECTOR_SCHEMAS, resolve_connector_type
+from metronix.connectors.schemas import CONNECTOR_SCHEMAS, get_schema, resolve_connector_type
 
 
 def test_resolve_connector_type_maps_google_drive_to_gdrive():
@@ -19,3 +19,15 @@ def test_resolved_alias_is_a_registered_schema():
     resolved = resolve_connector_type("google_drive")
     assert resolved in CONNECTOR_SCHEMAS
     assert "google_drive" not in CONNECTOR_SCHEMAS
+
+
+def test_get_schema_is_alias_aware():
+    # Direct regression for the schema-lookup gap: get_schema() must resolve
+    # the alias itself, not rely on the caller having already resolved it.
+    assert get_schema("google_drive") is get_schema("gdrive")
+    assert get_schema("google_drive") is not None
+    assert get_schema("google_drive").type == "gdrive"
+
+
+def test_get_schema_unknown_type_returns_none():
+    assert get_schema("sap") is None
