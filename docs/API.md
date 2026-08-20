@@ -229,11 +229,15 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/auth/me
 
 ### GET /api/v1/config
 
-Public. Returns installed plugin names (used by UI to detect enterprise features).
+Public. Returns installed plugin names (used by UI to detect enterprise
+features) and the list of known connector type keys (category=`connector`
+entries of `CONNECTOR_SCHEMAS`, string keys only — no labels/fields). The UI
+uses `connector_types` to render the type picker before the authenticated
+`/api/v1/connections/schemas/` call resolves.
 
 ```bash
 curl http://localhost:8000/api/v1/config
-# {"plugins": ["enterprise"]}
+# {"plugins": ["enterprise"], "connector_types": ["confluence", "gdrive", "github", "jira", "notion", "slack_history"]}
 ```
 
 ---
