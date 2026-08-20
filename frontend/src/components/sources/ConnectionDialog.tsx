@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Eye, EyeOff, Loader2, Check, AlertCircle } from 'lucide-react';
+import { X, Eye, EyeOff, Loader2, Check, AlertCircle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Connection, ConnectorSchema } from '@/api/connections';
 import { revealSecrets } from '@/api/connections';
@@ -16,6 +16,25 @@ interface ConnectionDialogProps {
   category: 'connector' | 'channel';
   workspaceId: string;
   editConnection?: Connection | null;
+  /**
+   * Connector-category type keys from the public /api/v1/config endpoint
+   * (no field details). Used as a step-1 fallback for the "connector"
+   * category when the authenticated `schemas` prop hasn't loaded them
+   * yet — channels have no public list, so this is ignored for those.
+   */
+  connectorTypeFallback?: string[];
+  schemasLoading?: boolean;
+  schemasError?: boolean;
+  onRetrySchemas?: () => void;
+}
+
+/** Turns a connector_type key like "slack_history" into "Slack History". */
+function humanizeConnectorType(type: string): string {
+  return type
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word[0]!.toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 const CONNECTOR_COLORS: Record<string, string> = {
@@ -49,6 +68,10 @@ export default function ConnectionDialog({
   category,
   workspaceId,
   editConnection,
+  connectorTypeFallback = [],
+  schemasLoading = false,
+  schemasError = false,
+  onRetrySchemas,
 }: ConnectionDialogProps) {
   const isEdit = !!editConnection;
   const [step, setStep] = useState<'select' | 'form'>(isEdit ? 'form' : 'select');
@@ -148,6 +171,21 @@ export default function ConnectionDialog({
   );
   const schema = selectedType ? schemas[selectedType] : null;
 
+  // Step-1 options: full schemas we have (label/icon), plus any
+  // public-only connector types not yet backed by a full schema — those
+  // render with a humanized label and get resolved (or explained as an
+  // error) once selected in step 2.
+  const knownTypes = new Set(filteredSchemas.map((s) => s.type));
+  const fallbackOnlyTypes =
+    category === 'connector'
+      ? connectorTypeFallback.filter((t) => !knownTypes.has(t))
+      : [];
+  const typeOptions = [
+    ...filteredSchemas.map((s) => ({ type: s.type, label: s.label })),
+    ...fallbackOnlyTypes.map((t) => ({ type: t, label: humanizeConnectorType(t) })),
+  ];
+  const selectedLabel = schema?.label ?? (selectedType ? humanizeConnectorType(selectedType) : '');
+
   function handleSelectType(type: string) {
     setSelectedType(type);
     setName('');
@@ -214,7 +252,7 @@ export default function ConnectionDialog({
               ? 'Edit Connection'
               : step === 'select'
                 ? `Add ${category === 'connector' ? 'Connection' : 'Channel'}`
-                : `New ${schema?.label ?? ''} Connection`}
+                : `New ${selectedLabel} Connection`}
           </h2>
           <button
             onClick={onClose}
@@ -226,15 +264,15 @@ export default function ConnectionDialog({
 
         {/* Step 1: Type selection */}
         {step === 'select' && (
-          filteredSchemas.length > 0 ? (
+          typeOptions.length > 0 ? (
             <div className="grid grid-cols-3 gap-3">
-              {filteredSchemas.map((s) => {
-                const color = CONNECTOR_COLORS[s.type] ?? '#6366f1';
-                const icon = CONNECTOR_ICONS[s.type] ?? '🔗';
+              {typeOptions.map((opt) => {
+                const color = CONNECTOR_COLORS[opt.type] ?? '#6366f1';
+                const icon = CONNECTOR_ICONS[opt.type] ?? '🔗';
                 return (
                   <button
-                    key={s.type}
-                    onClick={() => handleSelectType(s.type)}
+                    key={opt.type}
+                    onClick={() => handleSelectType(opt.type)}
                     className="flex flex-col items-center gap-2 rounded-xl border border-border p-4 hover:border-border-light hover:bg-surface-hover transition-colors"
                   >
                     <div
@@ -243,19 +281,97 @@ export default function ConnectionDialog({
                     >
                       {icon}
                     </div>
-                    <span className="text-xs font-medium text-text">{s.label}</span>
+                    <span className="text-xs font-medium text-text">{opt.label}</span>
                   </button>
                 );
               })}
+            </div>
+          ) : schemasLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 size={20} className="animate-spin text-text-muted" />
             </div>
           ) : (
             <div className="py-8 text-center">
               <p className="text-sm text-text-muted">No connection types available.</p>
               <p className="mt-1 text-xs text-text-dim">
-                Connection schemas could not be loaded. Close and try again.
+                {schemasError
+                  ? 'Connection schemas could not be loaded.'
+                  : 'Close and try again.'}
               </p>
+              {schemasError && onRetrySchemas && (
+                <button
+                  onClick={onRetrySchemas}
+                  className="mt-3 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <RefreshCw size={12} />
+                  Retry
+                </button>
+              )}
             </div>
           )
+        )}
+
+        {/* Step 2a: Form not resolvable — schemas still loading */}
+        {step === 'form' && !schema && selectedType && schemasLoading && (
+          <div className="space-y-4">
+            {!isEdit && (
+              <button
+                onClick={() => setStep('select')}
+                className="text-xs text-text-muted hover:text-text transition-colors"
+              >
+                ← Back to type selection
+              </button>
+            )}
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <Loader2 size={20} className="animate-spin text-text-muted" />
+              <p className="text-sm text-text-muted">Loading configuration fields…</p>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2b: Form not resolvable — schema request failed or type is unknown.
+            Deliberately does NOT fall through to an empty field list: the
+            user picked this type off the public connector_types list, but
+            we have no field definitions to validate/save against. */}
+        {step === 'form' && !schema && selectedType && !schemasLoading && (
+          <div className="space-y-4">
+            {!isEdit && (
+              <button
+                onClick={() => setStep('select')}
+                className="text-xs text-text-muted hover:text-text transition-colors"
+              >
+                ← Back to type selection
+              </button>
+            )}
+            <div className="flex flex-col items-center gap-2 rounded-lg border border-error/30 bg-error/10 px-4 py-6 text-center">
+              <AlertCircle size={20} className="text-error" />
+              <p className="text-sm text-error">
+                Couldn&rsquo;t load configuration fields for {selectedLabel}.
+              </p>
+              <p className="text-xs text-text-dim">
+                {schemasError
+                  ? 'The schema request failed, so this connection cannot be configured yet.'
+                  : 'This connector type is not recognized.'}
+              </p>
+              {schemasError && onRetrySchemas && (
+                <button
+                  onClick={onRetrySchemas}
+                  className="mt-1 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <RefreshCw size={12} />
+                  Retry
+                </button>
+              )}
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={onClose}
+                className="rounded-lg px-4 py-2 text-sm text-text-muted hover:text-text transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
 
         {/* Step 2: Form */}

@@ -3,6 +3,7 @@ import { Plus, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { uploadFile } from '@/api/upload';
 import { useWorkspaceStore } from '@/shared';
+import { useConfig } from '@/hooks/useConfig';
 import { useSchemas, useConnections } from '@/hooks/useConnections';
 import type { Connection } from '@/api/connections';
 import ConnectionCard from './ConnectionCard';
@@ -13,6 +14,7 @@ export default function SourcesPage() {
   const active = useWorkspaceStore((s) => s.active);
   const workspaceId = active?.workspace_id;
 
+  const { config } = useConfig();
   const schemasQuery = useSchemas();
   const connectorsQuery = useConnections('connector');
   const channelsQuery = useConnections('channel');
@@ -51,7 +53,18 @@ export default function SourcesPage() {
 
   const schemas = schemasQuery.data ?? {};
 
-  const schemasUnavailable = schemasQuery.isLoading || schemasQuery.isError;
+  // /api/v1/config is public and lists connector-category type keys
+  // (no auth needed), so the "Add Connection" button can rely on it even
+  // when the authenticated schema call (full field definitions) is still
+  // loading or has failed. Channels have no public list, so that button
+  // stays gated on the authenticated schemas query as before.
+  const connectorTypeFallback = config?.connector_types ?? [];
+  const hasAnyConnectorType =
+    connectorTypeFallback.length > 0 ||
+    Object.values(schemas).some((s) => s.category === 'connector');
+  const connectorAddDisabled =
+    !hasAnyConnectorType && (schemasQuery.isLoading || schemasQuery.isError);
+  const channelAddDisabled = schemasQuery.isLoading || schemasQuery.isError;
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-8">
@@ -59,7 +72,12 @@ export default function SourcesPage() {
       {schemasQuery.isError && (
         <div className="flex items-center gap-2 rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm text-error">
           <AlertCircle size={16} className="shrink-0" />
-          <span>Failed to load connection types.</span>
+          <span>
+            Failed to load connection type details.
+            {hasAnyConnectorType
+              ? ' Connector types are still selectable but field details are missing; channel types are unavailable.'
+              : ''}
+          </span>
           <button
             onClick={() => schemasQuery.refetch()}
             className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
@@ -76,7 +94,7 @@ export default function SourcesPage() {
           <h2 className="text-lg font-semibold text-text">Connectors</h2>
           <button
             onClick={() => openAddDialog('connector')}
-            disabled={schemasUnavailable}
+            disabled={connectorAddDisabled}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             <Plus size={14} />
@@ -115,7 +133,7 @@ export default function SourcesPage() {
           <h2 className="text-lg font-semibold text-text">Channels</h2>
           <button
             onClick={() => openAddDialog('channel')}
-            disabled={schemasUnavailable}
+            disabled={channelAddDisabled}
             className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-40 transition-colors"
           >
             <Plus size={14} />
@@ -162,6 +180,10 @@ export default function SourcesPage() {
         category={dialogCategory}
         workspaceId={workspaceId ?? ''}
         editConnection={editingConnection}
+        connectorTypeFallback={connectorTypeFallback}
+        schemasLoading={schemasQuery.isLoading}
+        schemasError={schemasQuery.isError}
+        onRetrySchemas={() => schemasQuery.refetch()}
       />
     </div>
   );
