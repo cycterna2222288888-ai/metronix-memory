@@ -70,6 +70,30 @@ class LifecycleStatus(StrEnum):
 MemoryStatus = LifecycleStatus
 
 
+# Statuses that mark a source as "expired" for display purposes (MTRNIX-181).
+# CANDIDATE/CONFLICTED/REVIEW_NEEDED are workflow states for agent memory, not
+# a freshness judgment on KB content, so they are deliberately excluded here.
+_EXPIRED_STATUSES = frozenset(
+    {LifecycleStatus.STALE, LifecycleStatus.SUPERSEDED, LifecycleStatus.ARCHIVED}
+)
+
+
+def is_expired_status(status: LifecycleStatus | str | None) -> bool:
+    """Return True if ``status`` marks a source as expired (stale/superseded/archived).
+
+    A missing or unrecognized status is ALWAYS treated as not expired — chunks
+    written before the freshness pipeline (MTRNIX-313) existed, or by sources
+    the pipeline doesn't cover, carry no ``status`` field at all and must
+    default to "active", never to a false-positive expired badge.
+    """
+    if not status:
+        return False
+    try:
+        return LifecycleStatus(status) in _EXPIRED_STATUSES
+    except ValueError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Documents & chunks
 # ---------------------------------------------------------------------------
