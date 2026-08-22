@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from metronix.core.config import Settings
 from metronix.core.events import DOCUMENT_ACCESSED, QUERY_EXECUTED
+from metronix.core.models import is_expired_status
 from metronix.ingestion.processors.dates import (
     extract_date_from_text,
     extract_date_range,
@@ -502,6 +503,9 @@ def _collect_frags(
         )
         date = mem.get("date") or (mem.get("payload") or {}).get("date") or ""
         dl = mem.get("doc_label") or (mem.get("payload") or {}).get("doc_label") or ""
+        # MTRNIX-181: status defaults to "active" here too, mirroring the
+        # _format_result fallback — a missing status must never read as expired.
+        status = mem.get("status") or (mem.get("payload") or {}).get("status") or "active"
 
         frags.append(
             {
@@ -512,6 +516,8 @@ def _collect_frags(
                 "date": date,
                 "doc_label": dl,
                 "evidence_marker": "",  # set later by _mark_evidence_role
+                "status": status,
+                "is_expired": is_expired_status(status),
             }
         )
 
@@ -560,12 +566,24 @@ def _mark_evidence_role(frags: list[dict], query_profile: str) -> None:
             frag["evidence_marker"] = "SUPPORTING"
 
 
+# MTRNIX-181: human-facing label per expired status, used only in the
+# citation list (never fed back into the LLM \u2014 see _build_ctx for that path).
+_EXPIRED_STATUS_LABELS = {
+    "stale": "outdated",
+    "superseded": "superseded",
+    "archived": "archived",
+}
+
+
 def _append_sources(answer: str, results: list) -> str:
     """Append a sources section to the answer with document titles and types.
 
     All unique sources are included so that every ``[$[title]$]`` reference
     marker in the LLM answer can be resolved to a URL by downstream consumers
     (frontend / OpenAI-compat layer).
+
+    MTRNIX-181: sources whose status is stale/superseded/archived get a
+    visible ``\u26a0\ufe0f (<label>)`` suffix so users can judge freshness at a glance.
     """
     seen_titles: set[str] = set()
     sources: list[str] = []
@@ -577,10 +595,15 @@ def _append_sources(answer: str, results: list) -> str:
         seen_titles.add(title)
         icon = _SOURCE_ICONS.get(source_type, "\U0001f4c4")
         url = mem.get("url") or (mem.get("payload") or {}).get("url") or ""
+        status = mem.get("status") or (mem.get("payload") or {}).get("status")
+        expiry_suffix = ""
+        if is_expired_status(status):
+            label = _EXPIRED_STATUS_LABELS.get(str(status).lower(), "outdated")
+            expiry_suffix = f" \u26a0\ufe0f ({label})"
         if url:
-            sources.append(f"{icon} {title} \u2014 {url}")
+            sources.append(f"{icon} {title} \u2014 {url}{expiry_suffix}")
         else:
-            sources.append(f"{icon} {title}")
+            sources.append(f"{icon} {title}{expiry_suffix}")
     if sources:
         return answer + "\n\n\U0001f4da Sources:\n" + "\n".join(sources)
     return answer
@@ -650,12 +673,18 @@ def _build_ctx(q, lang, frags, g_ents, g_rels, g_docs):
         for f in groups[role]:
             marker = f.get("evidence_marker", "SUPPORTING")
             date_suffix = f" ({f['date']})" if f.get("date") else ""
+            # MTRNIX-181: short, neutral marker only — no "don't trust this"
+            # phrasing here, since this text is fed back into the LLM as
+            # context and alarmist wording makes it prone to refusing to
+            # answer. The detailed status (stale/superseded/archived) is
+            # reserved for the human-facing citation list in _append_sources.
+            expiry_suffix = " (outdated)" if f.get("is_expired") else ""
             # Text already has [TYPE] Title\ncontent prefix from _collect_frags
             # Replace the first line with marker-prefixed version
             text_lines = f["text"].split("\n", 1)
             header = text_lines[0]
             body = text_lines[1] if len(text_lines) > 1 else ""
-            lines.append(f"[{marker}] {header}{date_suffix}")
+            lines.append(f"[{marker}] {header}{date_suffix}{expiry_suffix}")
             if body:
                 lines.append(body)
             lines.append("")  # blank line between fragments
