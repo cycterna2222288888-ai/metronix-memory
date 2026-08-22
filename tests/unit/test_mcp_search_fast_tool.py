@@ -76,3 +76,67 @@ class TestSearchFastTool:
 
         assert "error" in out
         assert out["error"]["code"] in {"INTERNAL_ERROR", "QDRANT_UNAVAILABLE"}
+
+
+class TestSearchFastStatusField:
+    """MTRNIX-181: expired sources are flagged via SearchFastItem.status."""
+
+    async def test_status_passthrough_for_expired_sources(self) -> None:
+        hits = [
+            {
+                "doc_label": "DOC-1",
+                "title": "Stale doc",
+                "memory": "contents",
+                "type": "confluence",
+                "score": 0.9,
+                "url": "",
+                "date": "",
+                "status": "stale",
+            },
+            {
+                "doc_label": "DOC-2",
+                "title": "Archived doc",
+                "memory": "contents",
+                "type": "confluence",
+                "score": 0.8,
+                "url": "",
+                "date": "",
+                "status": "archived",
+            },
+        ]
+        with patch(
+            "metronix.retrieval.search.fast_search",
+            new_callable=AsyncMock,
+            return_value=hits,
+        ):
+            from metronix.mcp.tools.search_fast import metronix_search_fast
+
+            out = await metronix_search_fast(query="anything")
+
+        assert out["results"][0]["status"] == "stale"
+        assert out["results"][1]["status"] == "archived"
+
+    async def test_missing_status_defaults_to_active(self) -> None:
+        """A hit with no status field at all (e.g. a legacy chunk) must
+        surface as 'active', never a false-positive expired source."""
+        hits = [
+            {
+                "doc_label": "DOC-1",
+                "title": "Legacy doc",
+                "memory": "contents",
+                "type": "confluence",
+                "score": 0.9,
+                "url": "",
+                "date": "",
+            },
+        ]
+        with patch(
+            "metronix.retrieval.search.fast_search",
+            new_callable=AsyncMock,
+            return_value=hits,
+        ):
+            from metronix.mcp.tools.search_fast import metronix_search_fast
+
+            out = await metronix_search_fast(query="anything")
+
+        assert out["results"][0]["status"] == "active"

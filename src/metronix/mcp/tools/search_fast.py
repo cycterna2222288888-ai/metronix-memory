@@ -33,6 +33,10 @@ def _hit_to_item(hit: dict[str, Any]) -> SearchFastItem:
         score=float(hit.get("score") or payload.get("score") or 0.0),
         url=pick("url"),
         date=pick("date"),
+        # MTRNIX-181: pick() only substitutes on None/"", so a missing status
+        # falls through to SearchFastItem's own "active" default — never a
+        # false-positive expired source.
+        status=pick("status", "active"),
     )
 
 
