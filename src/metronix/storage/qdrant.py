@@ -32,6 +32,7 @@ from qdrant_client.models import (
 )
 
 from metronix.core.config import get_settings
+from metronix.core.models import LifecycleStatus
 from metronix.ingestion.bm25 import compute_bm25_sparse_vector, compute_query_sparse_vector
 from metronix.llm.embeddings import (  # TODO: async migration
     embed_for_ingest,
@@ -207,6 +208,11 @@ class QdrantVectorStore:
             "workspace_id": payload.get("workspace_id", ""),
             "payload": payload,
             "source_role": payload.get("source_role", "knowledge_base"),
+            # MTRNIX-181: missing status always defaults to ACTIVE — chunks
+            # predating the freshness pipeline (MTRNIX-313) have no status
+            # field and must never read as a false-positive expired source.
+            "status": payload.get("status") or LifecycleStatus.ACTIVE.value,
+            "freshness_score": payload.get("freshness_score"),
         }
 
     def add_document(
@@ -703,6 +709,11 @@ class AsyncQdrantVectorStore:
             "workspace_id": payload.get("workspace_id", ""),
             "payload": payload,
             "source_role": payload.get("source_role", "knowledge_base"),
+            # MTRNIX-181: missing status always defaults to ACTIVE — chunks
+            # predating the freshness pipeline (MTRNIX-313) have no status
+            # field and must never read as a false-positive expired source.
+            "status": payload.get("status") or LifecycleStatus.ACTIVE.value,
+            "freshness_score": payload.get("freshness_score"),
         }
 
     @staticmethod
