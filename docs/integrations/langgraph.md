@@ -59,6 +59,15 @@ Default recommendation: start with MCP if the graph's job centers on memory. Rea
    ```
    Hosted (`AUTH_ENABLED=true`): use a user JWT instead (log in via `/api/v1/auth/login`),
    or have an admin issue a personal key via `POST /api/v1/users/{user_id}/api-keys`.
+
+   That personal key/JWT is necessary but, on its own, only sufficient if the
+   underlying user is an **admin**. A non-admin principal additionally needs an active
+   grant for the exact `(workspace_id, agent_id)` pair it's calling with, or every
+   `metronix_memory_*` call fails closed with `AUTH_REQUIRED`. Creating an agent does
+   **not** grant its creator access — only agents that already existed when grant
+   support shipped (migration `032_agent_access_grants`) were backfilled with one.
+   There is currently no public way to provision this grant for a new agent, so for a
+   hosted setup, use admin credentials.
 3. Install the two packages (in their own environment — see Prerequisites):
    ```bash
    pip install langgraph langchain-mcp-adapters
@@ -124,7 +133,11 @@ using the shared `METRONIX_MCP_API_KEY`. It authenticates the MCP *transport* bu
 binds a request principal, and every `metronix_memory_*` tool requires one
 (`require_agent_access` in `mcp/tools/_agent_access.py`) — tools without an ownership
 concept, like `metronix_status`, don't have this check, which is why they keep working
-and the memory tools don't. Swap in a personal API key (Setup step 2) or a JWT.
+and the memory tools don't. Swap in a personal API key (Setup step 2) or a JWT — but
+that alone is only enough if the underlying user is an **admin**. A non-admin principal
+also needs an active grant for the exact `(workspace_id, agent_id)` pair, which today
+has no public provisioning path (see Setup step 2), so use admin credentials for
+hosted setups.
 
 **Tools not appearing / empty list from `client.get_tools()`:** Double-check `transport`
 is `"http"` (or `"streamable_http"`) and not `"stdio"` — `headers` (and therefore auth)
