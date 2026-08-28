@@ -184,6 +184,32 @@ class TestChatCompletions:
 
     @patch("metronix.workspaces.get_workspace_manager")
     @patch("metronix.retrieval.search.hybrid_search_and_answer", new_callable=AsyncMock)
+    def test_expired_source_renders_as_well_formed_link(self, mock_search, mock_mgr, client):
+        """MTRNIX-181 regression: an expired-source suffix used to land inside
+        the parsed href (e.g. '...doc ⚠️ (outdated)'), producing an
+        unbalanced-paren markdown link. The suffix now sits on the title
+        side of the ' — ' separator, so the link and its href stay clean."""
+        mock_mgr.return_value.get_workspace.return_value = _TEST_WS
+        mock_search.return_value = (
+            "Answer here.\n\n\U0001f4da Sources:\n"
+            "\U0001f4c4 Old Doc ⚠️ (outdated) — https://example.com/doc"
+        )
+        r = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "metronix-rag-TEST_WS",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": False,
+            },
+            headers={"Authorization": "Bearer test-key-123"},
+        )
+        content = r.json()["choices"][0]["message"]["content"]
+        assert "[\U0001f4c4 Old Doc ⚠️ (outdated)](https://example.com/doc)" in content
+        assert "(outdated))" not in content
+        assert "https://example.com/doc ⚠️" not in content
+
+    @patch("metronix.workspaces.get_workspace_manager")
+    @patch("metronix.retrieval.search.hybrid_search_and_answer", new_callable=AsyncMock)
     def test_extra_openai_params_ignored(self, mock_search, mock_mgr, client):
         """temperature, max_tokens etc. are accepted but ignored."""
         mock_mgr.return_value.get_workspace.return_value = _TEST_WS
@@ -268,3 +294,33 @@ class TestChatCompletionsStreaming:
                 content = chunk["choices"][0]["delta"].get("content", "")
                 full_text += content
         assert "[\U0001f4c4 Doc](https://example.com)" in full_text
+
+    @patch("metronix.workspaces.get_workspace_manager")
+    @patch("metronix.retrieval.search.hybrid_search_and_answer", new_callable=AsyncMock)
+    def test_streaming_expired_source_renders_as_well_formed_link(
+        self, mock_search, mock_mgr, client
+    ):
+        """MTRNIX-181 regression (streaming path)."""
+        mock_mgr.return_value.get_workspace.return_value = _TEST_WS
+        mock_search.return_value = (
+            "Answer.\n\n\U0001f4da Sources:\n"
+            "\U0001f4c4 Old Doc ⚠️ (outdated) — https://example.com/doc"
+        )
+        r = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "metronix-rag-TEST_WS",
+                "messages": [{"role": "user", "content": "test"}],
+                "stream": True,
+            },
+            headers={"Authorization": "Bearer test-key-123"},
+        )
+        full_text = ""
+        for line in r.text.strip().split("\n"):
+            if line.startswith("data: ") and line != "data: [DONE]":
+                chunk = json.loads(line[6:])
+                content = chunk["choices"][0]["delta"].get("content", "")
+                full_text += content
+        assert "[\U0001f4c4 Old Doc ⚠️ (outdated)](https://example.com/doc)" in full_text
+        assert "(outdated))" not in full_text
+        assert "https://example.com/doc ⚠️" not in full_text

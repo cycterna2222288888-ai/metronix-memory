@@ -130,6 +130,20 @@ class TestAppendSourcesExpiryLabel:
         assert "⚠️ (outdated)" in out
         assert "Old Doc" in out
 
+    def test_expiry_label_sits_before_the_dash_not_after_the_url(self) -> None:
+        """Regression guard: the OpenAI-compat renderer (_parse_source /
+        _sources_to_markdown) splits each source line on the single ' — '
+        and takes everything after it as the href verbatim. The label must
+        stay on the title side of that separator — appending it after the
+        URL used to produce an unbalanced-paren markdown link like
+        '[Old doc](https://x/1 ⚠️ (outdated))'."""
+        from metronix.retrieval.search import _append_sources
+
+        results = [_make_result(status="stale", title="Old Doc", url="https://x/1")]
+        out = _append_sources("Answer text.", results)
+        assert "Old Doc ⚠️ (outdated) — https://x/1" in out
+        assert "https://x/1 ⚠️" not in out
+
     def test_superseded_source_labeled_superseded(self) -> None:
         from metronix.retrieval.search import _append_sources
 

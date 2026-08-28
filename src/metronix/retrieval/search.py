@@ -584,6 +584,12 @@ def _append_sources(answer: str, results: list) -> str:
 
     MTRNIX-181: sources whose status is stale/superseded/archived get a
     visible ``\u26a0\ufe0f (<label>)`` suffix so users can judge freshness at a glance.
+    The suffix goes on the title, BEFORE the ``\u2014 URL`` separator, never after the
+    URL: the OpenAI-compat layer (``_parse_source`` / ``_sources_to_markdown``
+    in ``api/routes/openai_compat.py``) splits each line on the single
+    ``\u2014`` and takes everything after it as the href verbatim. A suffix
+    appended after the URL used to ride along inside that href, producing an
+    unbalanced-paren markdown link like ``[Old doc](https://x/doc \u26a0\ufe0f (outdated))``.
     """
     seen_titles: set[str] = set()
     sources: list[str] = []
@@ -601,7 +607,7 @@ def _append_sources(answer: str, results: list) -> str:
             label = _EXPIRED_STATUS_LABELS.get(str(status).lower(), "outdated")
             expiry_suffix = f" \u26a0\ufe0f ({label})"
         if url:
-            sources.append(f"{icon} {title} \u2014 {url}{expiry_suffix}")
+            sources.append(f"{icon} {title}{expiry_suffix} \u2014 {url}")
         else:
             sources.append(f"{icon} {title}{expiry_suffix}")
     if sources:
