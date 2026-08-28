@@ -64,12 +64,13 @@ def _parse_tool_result(raw: Any) -> dict[str, Any]:
 
 
 class MemoryLoopState(TypedDict):
-    """Graph state threaded through retrieve -> reason -> store."""
+    """Graph state threaded through retrieve -> reason -> store -> verify."""
 
     query: str
     search_results: list[dict[str, Any]]
     should_store: bool
     stored_id: str | None
+    post_store_results: list[dict[str, Any]]
 
 
 def _build_client() -> MultiServerMCPClient:
@@ -95,19 +96,32 @@ async def build_graph():
     search_tool = tools_by_name["metronix_memory_search"]
     store_tool = tools_by_name["metronix_memory_store"]
 
-    async def retrieve(state: MemoryLoopState) -> dict[str, Any]:
-        raw = await search_tool.ainvoke(
-            {
-                "query": state["query"],
-                "agent_id": AGENT_ID,
-                "workspace_id": WORKSPACE_ID,
-                "top_k": 5,
-            }
-        )
-        parsed = _parse_tool_result(raw)
-        results = parsed.get("results", [])
-        print(f"[retrieve] {len(results)} existing memory record(s) for: {state['query']!r}")
-        return {"search_results": results}
+    def make_retrieve_node(output_key: str, label: str):
+        """Build a search-and-record node. ``retrieve`` (before store) and
+        ``verify`` (after store) share this same search call and just write
+        the results into different state fields, so the final summary can
+        show both counts from a single run instead of the second call
+        silently overwriting the first.
+        """
+
+        async def _node(state: MemoryLoopState) -> dict[str, Any]:
+            raw = await search_tool.ainvoke(
+                {
+                    "query": state["query"],
+                    "agent_id": AGENT_ID,
+                    "workspace_id": WORKSPACE_ID,
+                    "top_k": 5,
+                }
+            )
+            parsed = _parse_tool_result(raw)
+            results = parsed.get("results", [])
+            print(f"[{label}] {len(results)} memory record(s) for: {state['query']!r}")
+            return {output_key: results}
+
+        return _node
+
+    retrieve = make_retrieve_node("search_results", "retrieve")
+    verify = make_retrieve_node("post_store_results", "verify")
 
     async def reason(state: MemoryLoopState) -> dict[str, Any]:
         # A real agent would put an LLM call here to decide whether the
@@ -139,10 +153,12 @@ async def build_graph():
     graph.add_node("retrieve", retrieve)
     graph.add_node("reason", reason)
     graph.add_node("store", store)
+    graph.add_node("verify", verify)
     graph.add_edge(START, "retrieve")
     graph.add_edge("retrieve", "reason")
     graph.add_conditional_edges("reason", route_after_reason, {"store": "store", END: END})
-    graph.add_edge("store", END)
+    graph.add_edge("store", "verify")
+    graph.add_edge("verify", END)
     return graph.compile()
 
 
@@ -156,16 +172,21 @@ async def main() -> None:
     query = sys.argv[1] if len(sys.argv) > 1 else "Q3 deployment window for the LangGraph demo"
     app = await build_graph()
     result = await app.ainvoke(
-        {"query": query, "search_results": [], "should_store": False, "stored_id": None}
+        {
+            "query": query,
+            "search_results": [],
+            "should_store": False,
+            "stored_id": None,
+            "post_store_results": [],
+        }
     )
 
     print("\n--- final state ---")
-    print(f"query:      {result['query']}")
-    print(f"found:      {len(result['search_results'])} record(s)")
-    print(f"stored_id:  {result['stored_id']}")
-    if result["stored_id"]:
-        print("\nRun the same command again -- retrieve should now find this")
-        print("record and reason should skip the store step.")
+    print(f"query:              {result['query']}")
+    print(f"found before store: {len(result['search_results'])} record(s)")
+    print(f"stored_id:          {result['stored_id']}")
+    if result["stored_id"] is not None:
+        print(f"found after store:  {len(result['post_store_results'])} record(s)")
 
 
 if __name__ == "__main__":
