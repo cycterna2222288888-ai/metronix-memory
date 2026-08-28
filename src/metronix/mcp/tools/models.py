@@ -142,7 +142,25 @@ class MemoryDeleteResponse(BaseModel):
 
 
 class SearchFastItem(BaseModel):
-    """Single hit from metronix_search_fast (no rerank / answer generation)."""
+    """Single hit from metronix_search_fast (no rerank / answer generation).
+
+    MTRNIX-181: ``status`` reflects the source document's freshness lifecycle
+    (mirrored from ``raw_documents.status`` by the freshness pipeline,
+    MTRNIX-313). Possible values:
+
+    - ``"active"`` — current, no freshness concerns. Also the default for
+      chunks with no status field at all (indexed before the freshness
+      pipeline existed, or by a source it doesn't cover) — a missing status
+      is ALWAYS treated as active, never as an expired source.
+    - ``"stale"`` — flagged by the freshness pipeline as likely outdated, but
+      still searchable; content may no longer be accurate.
+    - ``"superseded"`` — replaced by a newer document; prefer the newer
+      version if one is cited elsewhere in the results.
+    - ``"archived"`` — retired from active use; kept for historical record.
+
+    Callers should treat ``"stale"``, ``"superseded"``, and ``"archived"``
+    as expired/needs-a-freshness-caveat when surfacing this item to a user.
+    """
 
     doc_label: str = ""
     title: str = ""
@@ -151,6 +169,7 @@ class SearchFastItem(BaseModel):
     score: float = 0.0
     url: str = ""
     date: str = ""
+    status: str = "active"
 
 
 class SearchFastResponse(BaseModel):
