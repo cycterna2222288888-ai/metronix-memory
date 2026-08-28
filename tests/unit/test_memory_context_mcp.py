@@ -37,6 +37,15 @@ class TestMemoryGetContextValidation:
         )
         assert "error" in result
 
+    async def test_invalid_agent_id_format(self) -> None:
+        result = await metronix_memory_get_context(
+            agent_id="agent id",  # space is outside the A-Za-z0-9._- charset
+            workspace_id="WS1",
+            query="test",
+        )
+        assert "error" in result
+        assert "must be 1-64 chars" in result["error"]["message"]
+
     async def test_missing_workspace_id(self) -> None:
         result = await metronix_memory_get_context(
             agent_id="agent-1",
