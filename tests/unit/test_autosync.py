@@ -262,6 +262,59 @@ class TestAutoSyncSchedulerTick:
         assert nra.tzinfo is not None
         assert nra > datetime.now(UTC)
 
+    async def test_claim_released_when_connection_vanishes(self) -> None:
+        """#401: get_connection_decrypted -> None after a won claim must NOT
+        leave the row stuck in 'syncing'. The claim is released to 'error'."""
+        scheduler, store = self._make_scheduler(max_concurrent=2)
+        conn_id = uuid.uuid4().hex
+        store.list_due_autosync_connections = AsyncMock(
+            return_value=[_make_connection_row(connection_id=conn_id)]
+        )
+        store.get_connection_decrypted = AsyncMock(return_value=None)
+        store.update_connection_status = AsyncMock()
+
+        await scheduler.tick()
+
+        store.create_sync_log.assert_not_called()
+        store.update_connection_status.assert_awaited_once()
+        assert store.update_connection_status.await_args.kwargs["status"] == "error"
+
+    async def test_claim_released_when_decrypt_raises(self) -> None:
+        """#401: an exception between the claim and create_task releases the
+        claim instead of propagating and orphaning the 'syncing' lock."""
+        scheduler, store = self._make_scheduler(max_concurrent=2)
+        conn_id = uuid.uuid4().hex
+        store.list_due_autosync_connections = AsyncMock(
+            return_value=[_make_connection_row(connection_id=conn_id)]
+        )
+        store.get_connection_decrypted = AsyncMock(
+            side_effect=RuntimeError("cryptography.fernet.InvalidToken")
+        )
+        store.update_connection_status = AsyncMock()
+
+        await scheduler.tick()  # must not raise
+
+        store.update_connection_status.assert_awaited_once()
+        assert store.update_connection_status.await_args.kwargs["status"] == "error"
+
+    async def test_claim_not_released_on_successful_spawn(self) -> None:
+        """Happy path: the sync task starts, so the claim is handed off to it —
+        _process_due_row must NOT also release it."""
+        scheduler, store = self._make_scheduler(max_concurrent=2)
+        conn_id = uuid.uuid4().hex
+        store.list_due_autosync_connections = AsyncMock(
+            return_value=[_make_connection_row(connection_id=conn_id)]
+        )
+        store.update_connection_status = AsyncMock()
+
+        with patch(
+            "metronix.connectors.connection_sync.run_connection_sync",
+            new_callable=AsyncMock,
+        ):
+            await scheduler.tick()
+
+        store.update_connection_status.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # 4. Coalesce: NULL next_run_at claimed once; after claim it has future timestamp
