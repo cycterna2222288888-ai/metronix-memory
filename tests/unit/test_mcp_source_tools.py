@@ -27,6 +27,10 @@ class FakeConnStore:
         self.status_updates = []
         self.sync_logs = []
         self.created = []
+        self.failed_stale = []
+        # Whether a 'syncing' lock looks backed by a live run (#401). Tests
+        # flip this to False to exercise the stale-lock reclaim path.
+        self.recent_running = True
 
     async def list_connections(self, workspace_id, fernet_key):
         return [c for c in self.connections.values() if c["workspace_id"] == workspace_id]
@@ -74,6 +78,13 @@ class FakeConnStore:
 
     async def create_sync_log(self, **kwargs):
         self.sync_logs.append(kwargs)
+
+    async def has_recent_running_sync(self, connection_id, within_minutes):
+        return self.recent_running
+
+    async def fail_stale_running_syncs(self, connection_id, older_than_minutes):
+        self.failed_stale.append((connection_id, older_than_minutes))
+        return len(self.failed_stale)
 
 
 async def _async_noop(*args, **kwargs):
@@ -314,11 +325,37 @@ async def test_sync_starts_background_task(monkeypatch):
 
 async def test_sync_rejects_when_already_syncing(monkeypatch):
     store = FakeConnStore({"c1": _connector_row(status="syncing")})
+    store.recent_running = True  # lock is backed by a live run
     _patch_resolve(monkeypatch, store)
 
     out = await source_sync.metronix_source_sync("c1")
     assert "error" in out
     assert "in progress" in out["error"]["message"].lower()
+
+
+async def test_sync_reclaims_stale_lock(monkeypatch):
+    """#401: status='syncing' but no fresh 'running' sync_logs row → the lock
+    is stale (task killed / hung), so the sync proceeds instead of being
+    rejected, and the orphaned running rows are marked failed."""
+    store = FakeConnStore({"c1": _connector_row(status="syncing")})
+    store.recent_running = False  # no live run behind the lock
+    _patch_resolve(monkeypatch, store)
+
+    ran = {}
+
+    async def _fake_run(**kwargs):
+        ran["kwargs"] = kwargs
+
+    monkeypatch.setattr("metronix.connectors.connection_sync.run_connection_sync", _fake_run)
+    monkeypatch.setattr("metronix.mcp.server.get_activity_bus", lambda: object())
+
+    out = await source_sync.metronix_source_sync("c1")
+    assert "error" not in out
+    assert out["status"] == "sync_started"
+    assert ("c1", "syncing") in store.status_updates
+    assert store.failed_stale and store.failed_stale[0][0] == "c1"
+    await asyncio.sleep(0)
+    assert ran["kwargs"]["connection_id"] == "c1"
 
 
 async def test_sync_rejects_scaffold_connector(monkeypatch):

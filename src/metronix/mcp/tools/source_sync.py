@@ -8,8 +8,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+import structlog
+
 from metronix.mcp.errors import handle_tool_error
 from metronix.mcp.server import mcp
+
+logger = structlog.get_logger()
 
 # Hold references so fire-and-forget sync tasks are not garbage-collected.
 _SYNC_TASKS: set[asyncio.Task[None]] = set()
@@ -42,6 +46,7 @@ async def metronix_source_sync(
     try:
         from metronix.connectors.connection_sync import run_connection_sync
         from metronix.connectors.schemas import CONNECTOR_SCHEMAS
+        from metronix.core.config import get_settings
         from metronix.mcp.server import get_activity_bus
         from metronix.mcp.tools._source_deps import resolve
         from metronix.mcp.tools.models import SourceSyncResponse
@@ -63,7 +68,20 @@ async def metronix_source_sync(
         if not conn.get("enabled", True):
             raise ValueError("Connection is disabled")
         if conn.get("status") == "syncing":
-            raise ValueError("Sync already in progress for this connection")
+            stale_after = get_settings().sync_stale_lock_minutes
+            if await store.has_recent_running_sync(connection_id, stale_after):
+                raise ValueError("Sync already in progress for this connection")
+            # Stale lock: the previous run's task is gone (API restart, crash,
+            # hang) but never cleared connections.status, and nothing else will
+            # until the next restart's recover_interrupted_syncs. Reclaim it so
+            # retry works without recreating the source (#401).
+            logger.warning(
+                "source_sync.stale_lock.reclaimed",
+                connection_id=connection_id,
+                stale_after_minutes=stale_after,
+            )
+            with contextlib.suppress(Exception):
+                await store.fail_stale_running_syncs(connection_id, stale_after)
 
         await store.update_connection_status(connection_id, status="syncing")
 

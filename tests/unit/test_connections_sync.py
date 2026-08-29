@@ -570,7 +570,8 @@ async def test_run_connection_sync_null_cursor_means_full_fetch(store, seeded_id
 
 
 async def test_trigger_sync_returns_409_when_connection_is_syncing(seeded_ids):
-    """A POST /sync/ against a connection with status='syncing' returns 409.
+    """A POST /sync/ against a connection with status='syncing' returns 409
+    while the lock is backed by a fresh 'running' sync_logs row.
 
     Best-effort guard (racy — see route comment). Verifies the common case:
     operator hits the button twice in a row, second hit is rejected.
@@ -594,11 +595,14 @@ async def test_trigger_sync_returns_409_when_connection_is_syncing(seeded_ids):
             "enabled": True,
         }
     )
+    mock_store.has_recent_running_sync = AsyncMock(return_value=True)  # live run
     mock_store.create_sync_log = AsyncMock()
     mock_store.update_connection_status = AsyncMock()
 
     app = FastAPI()
-    app.state.settings = MagicMock(fernet_key="x" * 44, default_workspace_id=ws)
+    app.state.settings = MagicMock(
+        fernet_key="x" * 44, default_workspace_id=ws, sync_stale_lock_minutes=60
+    )
     app.state.postgres = mock_store
     app.include_router(connections_router, prefix="/api/v1")
 
@@ -610,3 +614,55 @@ async def test_trigger_sync_returns_409_when_connection_is_syncing(seeded_ids):
     # Crucially: no sync log written, no status change, no background task.
     mock_store.create_sync_log.assert_not_awaited()
     mock_store.update_connection_status.assert_not_awaited()
+
+
+async def test_trigger_sync_reclaims_stale_lock():
+    """#401: status='syncing' with no fresh 'running' sync_logs row is a stale
+    lock — the sync proceeds (200) instead of returning 409, and the orphaned
+    running rows are marked failed."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from metronix.api.routes.connections import router as connections_router
+
+    ws = f"ws_stale_{uuid4().hex[:8]}"
+    cid = f"conn_stale_{uuid4().hex[:8]}"
+
+    mock_store = MagicMock()
+    mock_store.get_connection_decrypted = AsyncMock(
+        return_value={
+            "id": cid,
+            "workspace_id": ws,
+            "connector_type": "jira",
+            "config": {"url": "http://x", "username": "u", "api_token": "t", "project_key": "P"},
+            "status": "syncing",
+            "enabled": True,
+            "last_synced_at": None,
+        }
+    )
+    mock_store.has_recent_running_sync = AsyncMock(return_value=False)  # stale lock
+    mock_store.fail_stale_running_syncs = AsyncMock(return_value=1)
+    mock_store.create_sync_log = AsyncMock()
+    mock_store.update_connection_status = AsyncMock()
+
+    app = FastAPI()
+    app.state.settings = MagicMock(
+        fernet_key="x" * 44, default_workspace_id=ws, sync_stale_lock_minutes=60
+    )
+    app.state.postgres = mock_store
+    app.include_router(connections_router, prefix="/api/v1")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    with patch("metronix.api.routes.connections.run_connection_sync", MagicMock()):
+        resp = client.post(f"/api/v1/connections/{cid}/sync/")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "sync_started"
+    mock_store.fail_stale_running_syncs.assert_awaited_once()
+    # The reclaim path still marks the connection syncing and writes a fresh log.
+    statuses = [
+        c.kwargs.get("status") or (c.args[1] if len(c.args) > 1 else None)
+        for c in mock_store.update_connection_status.await_args_list
+    ]
+    assert "syncing" in statuses
+    mock_store.create_sync_log.assert_awaited_once()

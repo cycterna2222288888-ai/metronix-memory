@@ -677,11 +677,32 @@ async def trigger_sync(
     # above and the status update below another request can slip through) but
     # closes the common double-click / retry case. A race-free version requires
     # a conditional UPDATE on ``connections.status`` and is a separate ticket.
+    #
+    # A 'syncing' status only blocks when it is backed by a plausibly-live run
+    # (a 'running' sync_logs row younger than sync_stale_lock_minutes). A lock
+    # left behind by a killed / hung task is stale — reclaim it rather than
+    # block every future sync until the next API restart (#401).
     if conn.get("status") == "syncing":
-        raise HTTPException(
-            status_code=409,
-            detail="Sync already in progress for this connection",
+        settings: Settings = request.app.state.settings
+        stale_after = settings.sync_stale_lock_minutes
+        if await store.has_recent_running_sync(connection_id, stale_after):
+            raise HTTPException(
+                status_code=409,
+                detail="Sync already in progress for this connection",
+            )
+        logger.warning(
+            "connections.sync.stale_lock_reclaimed",
+            connection_id=connection_id,
+            stale_after_minutes=stale_after,
         )
+        try:
+            await store.fail_stale_running_syncs(connection_id, stale_after)
+        except Exception as e:  # noqa: BLE001 — cleanup is best-effort; sync still proceeds
+            logger.warning(
+                "connections.sync.stale_log_cleanup_failed",
+                connection_id=connection_id,
+                error=str(e),
+            )
 
     # Mark connection as syncing
     await store.update_connection_status(connection_id, status="syncing")

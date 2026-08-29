@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -32,6 +32,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 logger = structlog.get_logger()
+
+# Stamped on sync_logs rows abandoned when a stale 'syncing' lock is reclaimed
+# by a newer manual sync (#401). Sibling of recovery._INTERRUPTED_MSG.
+_STALE_SYNC_LOCK_MSG = "Sync abandoned: stale lock reclaimed by a newer run."
 
 
 def _to_pg_bigint(h: int) -> int:
@@ -814,6 +818,67 @@ class PostgresStore:
                 text(f"UPDATE sync_logs SET {', '.join(set_parts)} WHERE id = :id"),
                 params,
             )
+
+    async def has_recent_running_sync(self, connection_id: str, within_minutes: int) -> bool:
+        """True if this connection has a still-'running' sync_logs row that
+        started within ``within_minutes`` — i.e. its ``status='syncing'`` lock
+        is still backed by a plausibly-live task.
+
+        ``sync_logs`` has no heartbeat, so liveness is inferred purely from
+        ``created_at`` (the row is inserted synchronously when a sync starts).
+        A ``syncing`` connection with no such recent row is a stale lock — its
+        owning task was killed (API restart, SIGKILL) or hung — and a caller
+        may let a fresh manual sync pre-empt it (#401). ``EXISTS`` semantics:
+        if any ``running`` row is within the window we stay conservative and
+        report the lock live.
+        """
+        cutoff = datetime.now(UTC) - timedelta(minutes=within_minutes)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT 1 FROM sync_logs "
+                    "WHERE connection_id = :cid "
+                    "  AND status = 'running' "
+                    "  AND created_at IS NOT NULL "
+                    "  AND created_at >= :cutoff "
+                    "LIMIT 1"
+                ),
+                {"cid": connection_id, "cutoff": cutoff},
+            )
+            return result.first() is not None
+
+    async def fail_stale_running_syncs(self, connection_id: str, older_than_minutes: int) -> int:
+        """Mark this connection's stale 'running' sync_logs rows as 'failed'.
+
+        Called when a stale ``syncing`` lock is reclaimed (see
+        ``has_recent_running_sync``): the orphaned rows would otherwise show as
+        perpetually running until the next restart's ``recover_interrupted_syncs``.
+        Mirrors that helper's terminal state, message and duration stamp. The
+        cutoff matches ``has_recent_running_sync`` so the two never disagree
+        about which rows are stale. Returns the number of rows updated.
+        """
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(minutes=older_than_minutes)
+        async with self._engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    "UPDATE sync_logs SET "
+                    "  status = 'failed', "
+                    "  errors = CAST(:err AS jsonb), "
+                    "  duration_ms = COALESCE(EXTRACT(EPOCH FROM (:now - created_at)) * 1000, 0) "
+                    "WHERE connection_id = :cid "
+                    "  AND status = 'running' "
+                    "  AND (created_at IS NULL OR created_at < :cutoff) "
+                    "RETURNING id"
+                ),
+                {
+                    "cid": connection_id,
+                    "cutoff": cutoff,
+                    "now": now,
+                    "err": json.dumps([_STALE_SYNC_LOCK_MSG]),
+                },
+            )
+            return len(result.fetchall())
 
     # --- Document Versioning ---
 
