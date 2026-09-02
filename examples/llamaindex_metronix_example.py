@@ -246,6 +246,22 @@ async def memory_pass(client: BasicMCPClient, fact: str) -> bool:
     return retrieved
 
 
+def _verification_failures(node_count: int, memory_retrieved: bool) -> list[str]:
+    """Names of the verification passes that did not meet the guide's bar.
+
+    An empty list means the run passed. This script doubles as the guide's
+    "Verify" step, whose Setup seeds a couple of KB docs *before* you run it, so
+    a zero-node retrieval here is a real failure -- not an empty-corpus edge
+    case -- and must surface as a non-zero exit for a shell/CI caller.
+    """
+    failures: list[str] = []
+    if node_count <= 0:
+        failures.append("retrieval returned no nodes (seed KB docs -- guide Setup step 2)")
+    if not memory_retrieved:
+        failures.append("memory round-trip did not return the stored fact")
+    return failures
+
+
 async def main() -> None:
     if not METRONIX_MCP_TOKEN:
         print("Set METRONIX_MCP_TOKEN to a PERSONAL api key (mtk_...) -- see the module")
@@ -259,9 +275,17 @@ async def main() -> None:
     node_count = await retrieval_pass(client, question)
     retrieved = await memory_pass(client, f"LlamaIndex demo note: {question}")
 
+    failures = _verification_failures(node_count, retrieved)
     print("\n--- summary ---")
     print(f"retrieval nodes:        {node_count}")
     print(f"memory round-trip:      {'ok' if retrieved else 'FAILED'}")
+    if failures:
+        print("\nverification FAILED:")
+        for reason in failures:
+            print(f"  - {reason}")
+        print("\nCheck METRONIX_MCP_TOKEN is a personal mtk_ key and the KB is seeded.")
+        sys.exit(1)
+    print("verification:           ok")
 
 
 if __name__ == "__main__":

@@ -160,6 +160,9 @@ After setup, confirm the connection works:
    for the hand-seeded docs above), an `[answer]` block synthesized through `/v1`, a
    `[citations]` list, and `memory round-trip: ok` — the fact stored via
    `metronix_memory_store` is found again by `metronix_memory_search` in the same run.
+   The script exits `0` only when both passes succeed; a zero-node retrieval (KB not
+   seeded / wrong `workspace_id`) or a failed memory round-trip prints
+   `verification FAILED` and exits non-zero, so it is safe to gate a shell or CI check on.
 4. Alternatively, call `await client.list_tools()` and confirm `metronix_search_fast`,
    `metronix_memory_search`, and `metronix_memory_store` appear.
 
