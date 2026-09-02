@@ -162,6 +162,7 @@ class TestAutoSyncSchedulerTick:
             }
         )
         store.create_sync_log = AsyncMock()
+        store.update_sync_log = AsyncMock()
 
         scheduler = AutosyncScheduler(store=store, settings=settings, event_bus=None)
 
@@ -294,6 +295,61 @@ class TestAutoSyncSchedulerTick:
 
         await scheduler.tick()  # must not raise
 
+        store.update_connection_status.assert_awaited_once()
+        assert store.update_connection_status.await_args.kwargs["status"] == "error"
+
+    async def test_created_sync_log_finalized_when_handoff_fails(self) -> None:
+        """#425: a step AFTER create_sync_log fails (here: the decrypted row is
+        missing ``config``, so building the run_connection_sync args raises).
+        Both the connection lock AND the pre-inserted 'running' sync_logs row
+        must reach a terminal state — otherwise list_workspaces_with_running_sync
+        keeps the workspace flagged busy and the graph sweeper skips it until an
+        API restart."""
+        scheduler, store = self._make_scheduler(max_concurrent=2)
+        conn_id = uuid.uuid4().hex
+        store.list_due_autosync_connections = AsyncMock(
+            return_value=[_make_connection_row(connection_id=conn_id)]
+        )
+        # Decrypted row with no "config" key: create_sync_log still runs, then
+        # the run_connection_sync(config=conn_dict["config"]) lookup KeyErrors.
+        store.get_connection_decrypted = AsyncMock(
+            return_value={
+                "id": conn_id,
+                "connector_type": "confluence",
+                "workspace_id": "WS1",
+                "last_synced_at": None,
+            }
+        )
+        store.update_connection_status = AsyncMock()
+
+        await scheduler.tick()  # must not raise
+
+        # sync_logs row was pre-inserted...
+        store.create_sync_log.assert_awaited_once()
+        created_sync_id = store.create_sync_log.await_args.kwargs["sync_id"]
+        # ...then finalized as 'failed' with the same id.
+        store.update_sync_log.assert_awaited_once()
+        assert store.update_sync_log.await_args.args[0] == created_sync_id
+        assert store.update_sync_log.await_args.kwargs["status"] == "failed"
+        # ...and the connection lock is released to a terminal 'error'.
+        store.update_connection_status.assert_awaited_once()
+        assert store.update_connection_status.await_args.kwargs["status"] == "error"
+
+    async def test_no_sync_log_finalize_when_none_created(self) -> None:
+        """#425: if the connection vanishes before create_sync_log runs, the
+        release path has no log row to finalize — update_sync_log is not called."""
+        scheduler, store = self._make_scheduler(max_concurrent=2)
+        conn_id = uuid.uuid4().hex
+        store.list_due_autosync_connections = AsyncMock(
+            return_value=[_make_connection_row(connection_id=conn_id)]
+        )
+        store.get_connection_decrypted = AsyncMock(return_value=None)
+        store.update_connection_status = AsyncMock()
+
+        await scheduler.tick()
+
+        store.create_sync_log.assert_not_called()
+        store.update_sync_log.assert_not_called()
         store.update_connection_status.assert_awaited_once()
         assert store.update_connection_status.await_args.kwargs["status"] == "error"
 
