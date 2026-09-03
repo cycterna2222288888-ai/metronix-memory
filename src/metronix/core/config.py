@@ -389,9 +389,16 @@ class Settings(BaseSettings):
         description="Retrieval-side ARCHIVED/SUPERSEDED filter flag.",
     )
     freshness_weight: float = Field(
-        default=0.0,
+        default=0.1,
         alias="METRONIX_FRESHNESS_WEIGHT",
-        description="Scoring weight for the freshness signal. 0.0 = off.",
+        description=(
+            "Scoring weight for the freshness signal (MTRNIX-417). 0.0 = off. "
+            "Safe to enable by default: while the KB freshness producer "
+            "(freshness_kb_enabled) is off, every candidate's freshness_score "
+            "falls back to the same constant, so the term does not change "
+            "relative ranking within a query — it only starts discriminating "
+            "once the producer actually tags documents STALE/ACTIVE."
+        ),
     )
     freshness_kb_stale_after_days: int = Field(
         default=90,
