@@ -2,8 +2,9 @@
 You are a Hermes Agent with the Metronix MCP server registered and active (run
 prompt 1 first, then restart). Run this ONCE.
 Prompt 1 left a `metronix-config` block in your SOUL.md with the OPTIONAL wording;
-this prompt upgrades it to mandatory. If it already has the mandatory wording, just
-verify and report.
+this prompt checks memory authorization first, then upgrades it to mandatory only
+if that check passes. If it already has the mandatory wording, just verify and
+report.
 
 ## Parameters
 - DEFAULT_WORKSPACE_ID = {{DEFAULT_WORKSPACE_ID}}
@@ -23,7 +24,7 @@ Wait for the user's answers before continuing.
 ## 1. Memory policy
 Until now (after prompt 1) using Metronix memory was optional. This prompt makes it
 mandatory: all durable knowledge lives in Metronix, NOT in Hermes' built-in files.
-- The routing rule lives in `SOUL.md` (prompt 1 created it; step 3 below upgrades
+- The routing rule lives in `SOUL.md` (prompt 1 created it; step 4 below upgrades
   it), which Hermes loads on EVERY call — so the agent goes straight to Metronix
   with no extra lookup hop.
 - Do NOT wipe or edit `~/.hermes/memories/MEMORY.md` or `USER.md` here. Migrating
@@ -46,12 +47,30 @@ Memory (workspace_id + agent_id BOTH required):
 ALWAYS pass workspace_id (and agent_id for memory tools) explicitly — defaults
 will not add them for you.
 
-## 3. Upgrade the routing rule to mandatory (SOUL.md)
-Edit the LIVE SOUL.md that Hermes actually loads — typically
-`/root/.hermes/SOUL.md` when Hermes runs as root, otherwise `~/.hermes/SOUL.md`
-(expand `~` to the home of the user Hermes runs as). Do NOT edit any backup or
-copy of it (e.g. `SOUL.md.bak`, `SOUL.backup`, dated copies, files under a
-`backups/` dir) — those are not loaded and editing them does nothing.
+## 3. Preflight — verify the memory channel before writing anything
+Call `metronix_memory_list(workspace_id="{{DEFAULT_WORKSPACE_ID}}",
+agent_id="{{AGENT_UUID}}", limit=1)`.
+
+Success criterion: the response has **no** `error` field, or its `error.code`
+is anything other than `AUTH_REQUIRED`. An empty `records` list (no memory
+stored yet) is success, not a failure — do not treat "no records" as denial.
+
+If `error.code == "AUTH_REQUIRED"`: STOP. Do NOT edit SOUL.md. Report this to
+the user with the recovery path: the credential configured in prompt 1
+(`METRONIX_MCP_API_KEY`) authenticates MCP transport only and does not
+authorize memory tools. They need to obtain a personal API key (`mtk_…`) or a
+user JWT (see prompt 1's credential note), update the `Authorization` header
+under `mcp_servers.metronix` in the config written in prompt 1 to use it
+instead of the shared key, restart Hermes, then re-run this prompt. Do not
+attempt to self-provision a credential or otherwise bypass this check.
+
+## 4. Upgrade the routing rule to mandatory (SOUL.md)
+Only reached after the preflight above succeeds. Edit the LIVE SOUL.md that
+Hermes actually loads — typically `/root/.hermes/SOUL.md` when Hermes runs as
+root, otherwise `~/.hermes/SOUL.md` (expand `~` to the home of the user Hermes
+runs as). Do NOT edit any backup or copy of it (e.g. `SOUL.md.bak`,
+`SOUL.backup`, dated copies, files under a `backups/` dir) — those are not
+loaded and editing them does nothing.
 
 Prompt 1 wrote a `metronix-config` block with the OPTIONAL wording. Find that
 block and REPLACE its body with the mandatory rule below, leaving the agent's
@@ -71,10 +90,8 @@ was skipped), APPEND it at the END of the file:
 Do NOT touch `~/.hermes/memories/MEMORY.md` or `~/.hermes/memories/USER.md` —
 leave their existing content exactly as it is.
 
-## 4. Verify
+## 5. Verify
 - `metronix_status(workspace_id="{{DEFAULT_WORKSPACE_ID}}")` — KB connectivity
-- `metronix_memory_list(workspace_id="{{DEFAULT_WORKSPACE_ID}}",
-  agent_id="{{AGENT_UUID}}", limit=5)` — memory channel reachable
 - confirm the live SOUL.md `metronix-config` block now has the mandatory wording
   AND that all of its pre-existing persona content is still present and unchanged
 
