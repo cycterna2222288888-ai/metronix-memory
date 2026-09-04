@@ -3,8 +3,10 @@ You are a Hermes Agent with the Metronix MCP server registered and active (run
 prompt 1 first, then restart). Run this ONCE.
 Prompt 1 left a `metronix-config` block in your SOUL.md with the OPTIONAL wording;
 this prompt checks memory authorization first, then upgrades it to mandatory only
-if that check passes. If it already has the mandatory wording, just verify and
-report.
+if that check passes. If it already has the mandatory wording, skip step 4 (the
+file edit) — but still run the preflight in step 3 before verifying and
+reporting; a working credential can go stale between runs, so re-running must
+re-prove the memory channel, not assume it.
 
 ## Parameters
 - DEFAULT_WORKSPACE_ID = {{DEFAULT_WORKSPACE_ID}}
@@ -48,21 +50,41 @@ ALWAYS pass workspace_id (and agent_id for memory tools) explicitly — defaults
 will not add them for you.
 
 ## 3. Preflight — verify the memory channel before writing anything
+Run this step every time this prompt runs, including when step 4 will be
+skipped because the block already has the mandatory wording — never jump
+straight from step 0 to step 5 on a re-run.
+
 Call `metronix_memory_list(workspace_id="{{DEFAULT_WORKSPACE_ID}}",
 agent_id="{{AGENT_UUID}}", limit=1)`.
 
-Success criterion: the response has **no** `error` field, or its `error.code`
-is anything other than `AUTH_REQUIRED`. An empty `records` list (no memory
-stored yet) is success, not a failure — do not treat "no records" as denial.
+Success criterion (fail-closed): proceed to step 4 ONLY if the call returns a
+successfully-parsed response that contains **no** `error` field at all. An
+empty `records` list (no memory stored yet) is success, not a failure — do
+not treat "no records" as denial.
 
-If `error.code == "AUTH_REQUIRED"`: STOP. Do NOT edit SOUL.md. Report this to
-the user with the recovery path: the credential configured in prompt 1
-(`METRONIX_MCP_API_KEY`) authenticates MCP transport only and does not
-authorize memory tools. They need to obtain a personal API key (`mtk_…`) or a
-user JWT (see prompt 1's credential note), update the `Authorization` header
-under `mcp_servers.metronix` in the config written in prompt 1 to use it
-instead of the shared key, restart Hermes, then re-run this prompt. Do not
-attempt to self-provision a credential or otherwise bypass this check.
+Everything else is a failure. STOP. Do NOT edit SOUL.md. Report exactly what
+happened to the user instead of proceeding — this covers:
+- a response with an `error` field, whatever its `error.code` is
+  (`AUTH_REQUIRED`, `WORKSPACE_NOT_FOUND`, `INVALID_PARAMS`,
+  `INTERNAL_ERROR`, or any other code — only "no `error` field" counts as
+  success; do not special-case `AUTH_REQUIRED` as the sole failure)
+- a non-2xx HTTP response, or one with no parseable JSON body at all (e.g. a
+  plain HTTP 401 whose body is `{"detail": ...}` and carries no `error`
+  field — that is still a failure, not a pass by omission)
+- `metronix_memory_list` not being available as a tool in this session
+
+If `error.code == "AUTH_REQUIRED"` specifically, use this recovery path: the
+credential configured in prompt 1 (`METRONIX_MCP_API_KEY`) authenticates MCP
+transport only and does not authorize memory tools. They need to obtain a
+personal API key (`mtk_…`) or a user JWT (see prompt 1's credential note),
+update the `Authorization` header under `mcp_servers.metronix` in the config
+written in prompt 1 to use it instead of the shared key, restart Hermes, then
+re-run this prompt. Do not attempt to self-provision a credential or
+otherwise bypass this check.
+
+For every other failure above, report the tool name and whatever status
+code / error code / message the response carried, then stop there — do not
+guess a cause or improvise a different recovery path.
 
 ## 4. Upgrade the routing rule to mandatory (SOUL.md)
 Only reached after the preflight above succeeds. Edit the LIVE SOUL.md that
@@ -96,6 +118,9 @@ leave their existing content exactly as it is.
   AND that all of its pre-existing persona content is still present and unchanged
 
 ## Report format
-- SOUL.md: routing rule upgraded to mandatory; existing persona preserved
-- Verify: status ok, memory channel reachable
+- SOUL.md: routing rule upgraded to mandatory (or: left unchanged — already
+  mandatory on this run); existing persona preserved
+- Preflight (step 3): memory channel reachable — metronix_memory_list
+  returned no `error` field
+- Verify (step 5): metronix_status ok
 - Next step: run prompt 3 if this agent has prior memory to migrate

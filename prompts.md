@@ -163,9 +163,33 @@ user for it before doing anything else — never guess. Show these hints:
    - kind="pinned" — explicit instructions marked must-not-vanish.
    Memory tools require BOTH workspace_id and agent_id in arguments.
 
-2. Upgrade the routing rule from optional to mandatory. Prompt 1 wrote a
-   `metronix-config` block (with the OPTIONAL wording) into the persona / system /
-   always-on instruction file your runtime loads every turn. Find that block and
+2. Preflight — verify the memory channel before writing anything. Run this
+   step every time this prompt runs, including on a re-run where the routing
+   rule already has the mandatory wording — do not skip straight to step 4.
+
+   Call metronix_memory_list(workspace_id="{{DEFAULT_WORKSPACE_ID}}",
+   agent_id="{{AGENT_UUID}}", limit=1).
+
+   Success criterion (fail-closed): proceed to step 3 ONLY if the call
+   returns a successfully-parsed response with NO `error` field at all. An
+   empty `records` list (no memory stored yet) is success, not a failure —
+   do not treat "no records" as denial.
+
+   Everything else is a failure: STOP, do NOT edit the routing-rule file, and
+   report exactly what happened instead of proceeding. This covers a
+   response with an `error` field (whatever its code — AUTH_REQUIRED,
+   WORKSPACE_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR, or any other; only
+   "no `error` field" counts as success), a non-2xx HTTP response or one
+   with no parseable JSON body (e.g. a plain HTTP 401 with a `{"detail":
+   ...}` body and no `error` field — still a failure, not a pass by
+   omission), and `metronix_memory_list` not being available as a tool at
+   all. Do not attempt to self-provision a credential or otherwise bypass
+   this check; report the failure and stop.
+
+3. Upgrade the routing rule from optional to mandatory. Only reached after
+   the preflight above succeeds. Prompt 1 wrote a `metronix-config` block
+   (with the OPTIONAL wording) into the persona / system / always-on
+   instruction file your runtime loads every turn. Find that block and
    REPLACE its body with the mandatory rule below, leaving everything else in the
    file intact. If the block isn't there (prompt 1 was skipped), append it. Edit the
    live file the runtime actually loads, not a backup or copy:
@@ -179,15 +203,16 @@ user for it before doing anything else — never guess. Show these hints:
      durable knowledge locally.
      --- end metronix-config ---
 
-3. Verify:
+4. Verify:
    - metronix_status(workspace_id="{{DEFAULT_WORKSPACE_ID}}")
-   - metronix_memory_list(workspace_id="{{DEFAULT_WORKSPACE_ID}}",
-     agent_id="{{AGENT_UUID}}", limit=5)
    - confirm the rule is saved and any pre-existing instructions are intact.
 
 Report:
-- Routing rule: upgraded to mandatory (or appended if prompt 1 was skipped)
-- Verify: metronix_status ok / failed, memory_list returned N records
+- Preflight (step 2): memory channel reachable — metronix_memory_list
+  returned no `error` field
+- Routing rule: upgraded to mandatory (or appended if prompt 1 was skipped;
+  or left unchanged if already mandatory on this run)
+- Verify (step 4): metronix_status ok / failed
 - Next step: run prompt 3 if this agent has prior memory to migrate
 ```
 

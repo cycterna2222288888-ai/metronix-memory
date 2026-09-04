@@ -11,7 +11,9 @@ the shared key is ignored.
 > (`AUTH_ENABLED=false`), `POST /api/v1/users` with `{"email":"...", "password":"...",
 > "role":"admin"}` returns one (`api_key` in the response) with no login required. Hosted
 > (`AUTH_ENABLED=true`), log in as the seeded administrator via `/api/v1/auth/login` for a
-> JWT, or have an admin issue a personal key via `POST /api/v1/users/{user_id}/api-keys`.
+> JWT, or have an admin issue a personal key via `POST /api/v1/users/{user_id}/api-keys`
+> (`raw_key` in the response — that endpoint does NOT use the `api_key` field name from
+> the local path above).
 > The administrator account and its password (`AUTH_PASSWORD`) are seeded per the main
 > README — never delete existing data to reset it.
 
