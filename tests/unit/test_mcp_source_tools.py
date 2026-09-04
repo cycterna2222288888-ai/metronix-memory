@@ -373,6 +373,63 @@ async def test_sync_releases_claim_when_spawn_fails(monkeypatch):
     assert update_kwargs["status"] == "failed"
 
 
+class _RaisingCreateLogStore(FakeConnStore):
+    """create_sync_log always raises — a transient DB error on the pre-insert
+    INSERT (#425 round 2). It is deliberately non-fatal: the sync must still
+    be spawned, with no 'running' sync_logs row behind connections.status
+    ending up 'syncing'."""
+
+    async def create_sync_log(self, **kwargs):
+        self.sync_logs.append(kwargs)  # record the attempt for assertions
+        raise RuntimeError("simulated transient DB error on sync_logs INSERT")
+
+
+async def test_sync_second_request_blocked_when_create_sync_log_failed(monkeypatch):
+    """#425 round 2 review: create_sync_log failing must not let a second,
+    concurrent metronix_source_sync call slip past the duplicate-sync guard.
+
+    The guard used to treat has_running_sync()==False as permission to
+    proceed even when connections.status=='syncing' — which is exactly the
+    state a task left behind when its own create_sync_log INSERT failed. It
+    now gates on connections.status alone, so this must be rejected
+    regardless of what has_running_sync reports.
+    """
+    store = _RaisingCreateLogStore({"c1": _connector_row()})
+    store.running_sync = False  # no sync_logs row exists — the INSERT failed
+    _patch_resolve(monkeypatch, store)
+
+    ran: dict[str, object] = {}
+
+    async def _fake_run(**kwargs):
+        ran["kwargs"] = kwargs
+
+    monkeypatch.setattr("metronix.connectors.connection_sync.run_connection_sync", _fake_run)
+
+    # First request: create_sync_log raises, but the sync must still start —
+    # that non-fatal behavior is what this test protects, not just the guard.
+    out1 = await source_sync.metronix_source_sync("c1")
+    assert "error" not in out1
+    assert out1["status"] == "sync_started"
+    assert store.sync_logs  # create_sync_log was attempted (and raised)
+    assert ("c1", "syncing") in store.status_updates
+    # The claim was NOT released — the task really is in flight, unlike the
+    # spawn-failure test above.
+    assert ("c1", "error") not in store.status_updates
+    await asyncio.sleep(0)
+    assert ran["kwargs"]["connection_id"] == "c1"
+
+    # Reflect what the real DB would show after the first request:
+    # FakeConnStore.update_connection_status only records the call, it
+    # doesn't mutate the stored row, so set it explicitly here.
+    store.connections["c1"]["status"] = "syncing"
+
+    # Second, concurrent request against the still-syncing connection must be
+    # rejected — even though has_running_sync (store.running_sync) is False.
+    out2 = await source_sync.metronix_source_sync("c1")
+    assert "error" in out2
+    assert "in progress" in out2["error"]["message"].lower()
+
+
 async def test_sync_rejects_scaffold_connector(monkeypatch):
     # slack_history is still a scaffold (unimplemented) connector; gdrive/github now sync.
     store = FakeConnStore({"c1": _connector_row(connector_type="slack_history")})

@@ -822,18 +822,36 @@ class PostgresStore:
         merely-long-running sync from a dead one by elapsed time alone — a
         healthy Confluence/Jira sync can run close to an hour, and any
         age-based cutoff either false-positives on that or is too loose to
-        help (#425 review). So this is a plain presence check, no time
-        window: a 'running' row always means the lock is live and callers
-        must not pre-empt it. The only case callers may treat as a reusable
-        stale lock is *no* running row at all (``connections.status='syncing'``
-        with nothing backing it) — every sync entry point (autosync tick,
-        REST ``trigger_sync``, ``metronix_source_sync``) now releases its own
-        claim via ``connection_sync.release_unstarted_sync_claim`` when it
-        fails to hand off to a real running task, so that case should stay
-        rare. A task that dies without releasing its claim (killed process,
-        hard crash) is recovered at the next API restart by
-        ``recover_interrupted_syncs`` — there is no automatic in-process path
-        for that, by design (#425).
+        help (#425 round 1 review). So this is a plain presence check, no
+        time window: a 'running' row always means the lock is live and
+        callers must not pre-empt it.
+
+        **Absence of a running row is NOT proof that nothing is running, and
+        must not be read as "safe to reclaim".** ``create_sync_log`` is
+        deliberately non-fatal at every sync entry point (autosync tick, REST
+        ``trigger_sync``, ``metronix_source_sync``) — a transient DB error on
+        that one INSERT does not stop the sync from starting, on purpose (so
+        e.g. a single dropped write never costs autosync a whole cycle, up to
+        24h until the next due tick). So ``connections.status == 'syncing'``
+        with a real ``run_connection_sync`` task in flight and NO backing row
+        at all is a normal, reachable state (#425 round 2 review) — and it is
+        *indistinguishable* from a connection whose claim was genuinely
+        abandoned (``release_unstarted_sync_claim`` ran, or should have) and
+        is safe to retry. Because of that, the REST and MCP duplicate-sync
+        guards do NOT call this method to decide whether to let a second
+        request through; they gate on ``connections.status == 'syncing'``
+        alone, unconditionally. There was never a legitimate case this method
+        protected there — the only way to reach "syncing with no running row
+        as an observable, lasting state" *was* this failure mode.
+
+        This method still has legitimate uses: as a diagnostic signal (log a
+        suspected-orphan warning when status is 'syncing' but this returns
+        False, without acting on it — see the REST/MCP guards for the
+        pattern), and anywhere that genuinely wants "is a sync log row live"
+        rather than "is it safe to start another sync". A task that dies
+        without releasing its claim (killed process, hard crash) is recovered
+        at the next API restart by ``recover_interrupted_syncs`` — there is
+        no automatic in-process path for that, by design (#425).
         """
         async with self._engine.begin() as conn:
             result = await conn.execute(

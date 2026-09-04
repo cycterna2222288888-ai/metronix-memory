@@ -684,3 +684,96 @@ async def test_trigger_sync_releases_claim_when_spawn_fails():
     # ...and the pre-inserted sync_logs row was finalized as "failed" too.
     mock_store.update_sync_log.assert_awaited_once()
     assert mock_store.update_sync_log.await_args.kwargs["status"] == "failed"
+
+
+async def test_trigger_sync_second_post_blocked_when_create_sync_log_failed(monkeypatch):
+    """#425 round 2 review: create_sync_log failing must not let a second,
+    concurrent POST /sync/ slip past the duplicate-sync guard.
+
+    The guard used to treat has_running_sync()==False as permission to
+    proceed even when connections.status=='syncing' — which is exactly the
+    state a task left behind when its own create_sync_log INSERT failed (the
+    sync is deliberately spawned anyway; see the try/except around
+    create_sync_log in trigger_sync). It now gates on connections.status
+    alone, so the second request must be rejected regardless of what
+    has_running_sync reports.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from metronix.api.routes.connections import router as connections_router
+
+    ws = f"ws_dup_{uuid4().hex[:8]}"
+    cid = f"conn_dup_{uuid4().hex[:8]}"
+
+    conn_row: dict[str, object] = {
+        "id": cid,
+        "workspace_id": ws,
+        "connector_type": "jira",
+        "config": {"url": "http://x", "username": "u", "api_token": "t", "project_key": "P"},
+        "status": "active",
+        "enabled": True,
+        "last_synced_at": None,
+    }
+
+    mock_store = MagicMock()
+    mock_store.get_connection_decrypted = AsyncMock(return_value=conn_row)
+    mock_store.has_running_sync = AsyncMock(return_value=False)  # the INSERT never landed
+    mock_store.create_sync_log = AsyncMock(
+        side_effect=RuntimeError("simulated transient DB error on sync_logs INSERT")
+    )
+    mock_store.update_connection_status = AsyncMock()
+    mock_store.update_sync_log = AsyncMock()
+
+    app = FastAPI()
+    app.state.settings = MagicMock(fernet_key="x" * 44, default_workspace_id=ws)
+    app.state.postgres = mock_store
+    app.include_router(connections_router, prefix="/api/v1")
+
+    ran: dict[str, object] = {}
+
+    async def _fake_run(**kwargs):
+        ran["kwargs"] = kwargs
+
+    # trigger_sync's `background_tasks.add_task(run_connection_sync, ...)`
+    # resolves the name from this module's globals at call time, so this is
+    # the module to patch — not connectors.connection_sync, whose name was
+    # already bound into connections.py's namespace at import time.
+    monkeypatch.setattr(
+        "metronix.api.routes.connections.run_connection_sync",
+        _fake_run,
+    )
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # First POST: create_sync_log raises, but the sync must still start —
+    # BackgroundTasks run synchronously within the TestClient request, so
+    # _fake_run has already executed by the time this returns.
+    resp1 = client.post(f"/api/v1/connections/{cid}/sync/")
+    assert resp1.status_code == 200
+    assert resp1.json()["status"] == "sync_started"
+    assert ran["kwargs"]["connection_id"] == cid
+    mock_store.create_sync_log.assert_awaited_once()
+
+    # The claim was set to "syncing" once, and never released to "error" —
+    # the task really is in flight, unlike test_trigger_sync_releases_claim_
+    # when_spawn_fails above.
+    statuses = [
+        c.kwargs.get("status") or (c.args[1] if len(c.args) > 1 else None)
+        for c in mock_store.update_connection_status.await_args_list
+    ]
+    assert statuses == ["syncing"]
+
+    # Reflect what the real DB would show after the first request: set here
+    # explicitly since the mock doesn't mutate conn_row on its own.
+    conn_row["status"] = "syncing"
+
+    # Second, concurrent POST against the still-syncing connection must be
+    # rejected — even though has_running_sync (mocked False) says there's no
+    # backing sync_logs row.
+    resp2 = client.post(f"/api/v1/connections/{cid}/sync/")
+    assert resp2.status_code == 409
+    assert "already in progress" in resp2.json()["detail"].lower()
+    # No second sync was spawned, and the claim was not touched again.
+    mock_store.create_sync_log.assert_awaited_once()
+    assert len(mock_store.update_connection_status.await_args_list) == 1
