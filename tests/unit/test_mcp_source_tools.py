@@ -26,11 +26,13 @@ class FakeConnStore:
         self.deleted = []
         self.status_updates = []
         self.sync_logs = []
+        self.sync_log_updates = []
         self.created = []
-        self.failed_stale = []
-        # Whether a 'syncing' lock looks backed by a live run (#401). Tests
-        # flip this to False to exercise the stale-lock reclaim path.
-        self.recent_running = True
+        # Whether a 'syncing' lock has a 'running' sync_logs row behind it
+        # (#401/#425). No time window — see postgres.has_running_sync's
+        # docstring. Tests flip this to False to exercise the
+        # no-running-row reclaim path (release_unstarted_sync_claim).
+        self.running_sync = True
 
     async def list_connections(self, workspace_id, fernet_key):
         return [c for c in self.connections.values() if c["workspace_id"] == workspace_id]
@@ -79,12 +81,11 @@ class FakeConnStore:
     async def create_sync_log(self, **kwargs):
         self.sync_logs.append(kwargs)
 
-    async def has_recent_running_sync(self, connection_id, within_minutes):
-        return self.recent_running
+    async def update_sync_log(self, sync_id, **kwargs):
+        self.sync_log_updates.append((sync_id, kwargs))
 
-    async def fail_stale_running_syncs(self, connection_id, older_than_minutes):
-        self.failed_stale.append((connection_id, older_than_minutes))
-        return len(self.failed_stale)
+    async def has_running_sync(self, connection_id):
+        return self.running_sync
 
 
 async def _async_noop(*args, **kwargs):
@@ -324,8 +325,11 @@ async def test_sync_starts_background_task(monkeypatch):
 
 
 async def test_sync_rejects_when_already_syncing(monkeypatch):
+    """#425 review: this must hold no matter how long the running row has
+    been running — has_running_sync takes no age parameter at all, so there
+    is nothing here that could single out an "old" run for reclaim."""
     store = FakeConnStore({"c1": _connector_row(status="syncing")})
-    store.recent_running = True  # lock is backed by a live run
+    store.running_sync = True  # lock is backed by a live run, any age
     _patch_resolve(monkeypatch, store)
 
     out = await source_sync.metronix_source_sync("c1")
@@ -333,29 +337,40 @@ async def test_sync_rejects_when_already_syncing(monkeypatch):
     assert "in progress" in out["error"]["message"].lower()
 
 
-async def test_sync_reclaims_stale_lock(monkeypatch):
-    """#401: status='syncing' but no fresh 'running' sync_logs row → the lock
-    is stale (task killed / hung), so the sync proceeds instead of being
-    rejected, and the orphaned running rows are marked failed."""
-    store = FakeConnStore({"c1": _connector_row(status="syncing")})
-    store.recent_running = False  # no live run behind the lock
+async def test_sync_releases_claim_when_spawn_fails(monkeypatch):
+    """#425: a step AFTER 'syncing' is set but BEFORE the background task is
+    scheduled raises (here: the connection row has no "config" key, so
+    building the run_connection_sync call KeyErrors). The connection lock and
+    the pre-inserted 'running' sync_logs row must both reach a terminal state
+    via release_unstarted_sync_claim — otherwise has_running_sync() reports
+    this connection busy forever, since nothing else can ever reclaim it
+    without an actual running row (#401)."""
+    row = {
+        "id": "c1",
+        "workspace_id": "default",
+        "connector_type": "confluence",
+        "status": "active",
+        "enabled": True,
+        "last_synced_at": None,
+        # No "config" key — metronix_source_sync's
+        # run_connection_sync(..., config=conn["config"], ...) KeyErrors
+        # while building the call, before asyncio.create_task ever runs.
+    }
+    store = FakeConnStore({"c1": row})
+    store.running_sync = False
     _patch_resolve(monkeypatch, store)
 
-    ran = {}
-
-    async def _fake_run(**kwargs):
-        ran["kwargs"] = kwargs
-
-    monkeypatch.setattr("metronix.connectors.connection_sync.run_connection_sync", _fake_run)
-    monkeypatch.setattr("metronix.mcp.server.get_activity_bus", lambda: object())
-
     out = await source_sync.metronix_source_sync("c1")
-    assert "error" not in out
-    assert out["status"] == "sync_started"
-    assert ("c1", "syncing") in store.status_updates
-    assert store.failed_stale and store.failed_stale[0][0] == "c1"
-    await asyncio.sleep(0)
-    assert ran["kwargs"]["connection_id"] == "c1"
+
+    assert "error" in out
+    # The claim was taken (status set to "syncing" first)...
+    assert store.status_updates[0] == ("c1", "syncing")
+    # ...then released to a terminal "error" by release_unstarted_sync_claim.
+    assert store.status_updates[-1] == ("c1", "error")
+    # ...and the pre-inserted sync_logs row was finalized as "failed" too.
+    assert store.sync_log_updates
+    _, update_kwargs = store.sync_log_updates[0]
+    assert update_kwargs["status"] == "failed"
 
 
 async def test_sync_rejects_scaffold_connector(monkeypatch):

@@ -13,6 +13,10 @@ from metronix.storage.pg_connection import get_engine, get_session
 from metronix.storage.pg_models import SyncLogRow
 from metronix.storage.postgres import PostgresStore
 
+# Deliberately far past any reclaim threshold this repo has ever shipped
+# (#425 review: age alone must never make a running row look free).
+_A_LONG_TIME = timedelta(hours=6)
+
 
 @pytest.fixture
 async def store():
@@ -121,7 +125,9 @@ async def test_update_sync_log_accepts_failed_with_errors(store, seeded_ids):
 
 
 # ---------------------------------------------------------------------------
-# Stale-lock reclaim helpers (#401)
+# has_running_sync (#401 / #425)
+#
+# No time window — see postgres.py's has_running_sync docstring for why.
 # ---------------------------------------------------------------------------
 
 
@@ -144,55 +150,32 @@ def _insert_sync_log(*, ws: str, cid: str, status: str, created_at: datetime | N
     return sync_id
 
 
-async def test_has_recent_running_sync_true_for_fresh_running_row(store, seeded_ids):
+async def test_has_running_sync_true_for_fresh_running_row(store, seeded_ids):
     ws, cid = seeded_ids
     _insert_sync_log(ws=ws, cid=cid, status="running", created_at=datetime.now(UTC))
 
-    assert await store.has_recent_running_sync(cid, within_minutes=60) is True
+    assert await store.has_running_sync(cid) is True
 
 
-async def test_has_recent_running_sync_false_when_running_row_is_old(store, seeded_ids):
+async def test_has_running_sync_true_regardless_of_age(store, seeded_ids):
+    """The #425 review's core ask: a live task must never be preempted just
+    because it has been running a long time. There is no age cutoff at all
+    now — a 'running' row this old is exactly the shape of a healthy long
+    Confluence/Jira sync, and must still block a retry."""
     ws, cid = seeded_ids
     _insert_sync_log(
         ws=ws,
         cid=cid,
         status="running",
-        created_at=datetime.now(UTC) - timedelta(minutes=90),
+        created_at=datetime.now(UTC) - _A_LONG_TIME,
     )
 
-    assert await store.has_recent_running_sync(cid, within_minutes=60) is False
+    assert await store.has_running_sync(cid) is True
 
 
-async def test_has_recent_running_sync_false_when_no_running_row(store, seeded_ids):
+async def test_has_running_sync_false_when_no_running_row(store, seeded_ids):
     ws, cid = seeded_ids
-    # A finished run inside the window must not count — only 'running' does.
+    # A finished run must not count — only 'running' does.
     _insert_sync_log(ws=ws, cid=cid, status="success", created_at=datetime.now(UTC))
 
-    assert await store.has_recent_running_sync(cid, within_minutes=60) is False
-
-
-async def test_fail_stale_running_syncs_marks_old_running_failed(store, seeded_ids):
-    ws, cid = seeded_ids
-    old = _insert_sync_log(
-        ws=ws,
-        cid=cid,
-        status="running",
-        created_at=datetime.now(UTC) - timedelta(minutes=120),
-    )
-    fresh = _insert_sync_log(ws=ws, cid=cid, status="running", created_at=datetime.now(UTC))
-
-    n = await store.fail_stale_running_syncs(cid, older_than_minutes=60)
-
-    assert n == 1
-    with get_session() as s:
-        old_row = s.query(SyncLogRow).filter_by(id=old).first()
-        fresh_row = s.query(SyncLogRow).filter_by(id=fresh).first()
-        old_status = old_row.status
-        old_errors = list(old_row.errors)
-        old_duration_ms = old_row.duration_ms
-        fresh_status = fresh_row.status
-    assert old_status == "failed"
-    assert any("stale lock" in e.lower() for e in old_errors)
-    assert old_duration_ms > 0
-    # The still-fresh run is left alone — it may genuinely be in flight.
-    assert fresh_status == "running"
+    assert await store.has_running_sync(cid) is False

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import uuid
 from datetime import datetime
 from typing import Any
@@ -44,9 +43,11 @@ async def metronix_source_sync(
 ) -> dict[str, Any]:
     """Start a background sync for a data-source connection."""
     try:
-        from metronix.connectors.connection_sync import run_connection_sync
+        from metronix.connectors.connection_sync import (
+            release_unstarted_sync_claim,
+            run_connection_sync,
+        )
         from metronix.connectors.schemas import CONNECTOR_SCHEMAS
-        from metronix.core.config import get_settings
         from metronix.mcp.server import get_activity_bus
         from metronix.mcp.tools._source_deps import resolve
         from metronix.mcp.tools.models import SourceSyncResponse
@@ -67,63 +68,77 @@ async def metronix_source_sync(
             )
         if not conn.get("enabled", True):
             raise ValueError("Connection is disabled")
-        if conn.get("status") == "syncing":
-            stale_after = get_settings().sync_stale_lock_minutes
-            if await store.has_recent_running_sync(connection_id, stale_after):
-                raise ValueError("Sync already in progress for this connection")
-            # Stale lock: the previous run's task is gone (API restart, crash,
-            # hang) but never cleared connections.status, and nothing else will
-            # until the next restart's recover_interrupted_syncs. Reclaim it so
-            # retry works without recreating the source (#401).
-            logger.warning(
-                "source_sync.stale_lock.reclaimed",
-                connection_id=connection_id,
-                stale_after_minutes=stale_after,
-            )
-            with contextlib.suppress(Exception):
-                await store.fail_stale_running_syncs(connection_id, stale_after)
+        # A 'syncing' status backed by a 'running' sync_logs row always blocks
+        # — no time-based reclaim. sync_logs has no heartbeat, so elapsed time
+        # cannot tell a healthy long sync (up to ~1h per this tool's own
+        # description) from a dead one; reclaiming by age let a retry preempt
+        # a still-running task and corrupt connection state when the original
+        # later finished (#425 review). The only lock reclaimed automatically
+        # is 'syncing' with NO running row at all — see
+        # release_unstarted_sync_claim below, mirrored across every sync entry
+        # point. A genuinely killed/hung task is recovered at the next API
+        # restart by recover_interrupted_syncs, not here (#401).
+        if conn.get("status") == "syncing" and await store.has_running_sync(connection_id):
+            raise ValueError("Sync already in progress for this connection")
 
         await store.update_connection_status(connection_id, status="syncing")
 
         sync_id = f"sync_{uuid.uuid4().hex[:12]}"
-        # Non-fatal: sync still runs, we just lose the pre-inserted log row.
-        with contextlib.suppress(Exception):
-            await store.create_sync_log(
-                sync_id=sync_id,
-                workspace_id=ws_id,
-                connection_id=connection_id,
-                connector_type=connector_type,
-                trigger="mcp",
-            )
-
-        last_synced_iso = conn.get("last_synced_at")
-        last_synced_dt: datetime | None = None
-        if last_synced_iso:
+        spawned = False
+        created_sync_id: str | None = None
+        try:
+            # Non-fatal: sync still runs, we just lose the pre-inserted log row.
             try:
-                last_synced_dt = datetime.fromisoformat(last_synced_iso)
-            except (ValueError, TypeError):
-                last_synced_dt = None
+                await store.create_sync_log(
+                    sync_id=sync_id,
+                    workspace_id=ws_id,
+                    connection_id=connection_id,
+                    connector_type=connector_type,
+                    trigger="mcp",
+                )
+                created_sync_id = sync_id
+            except Exception:
+                logger.warning(
+                    "source_sync.create_log.failed", connection_id=connection_id, exc_info=True
+                )
 
-        # Wire the EventBus the same way the memory tools do (mcp/server.py):
-        # when /mcp is mounted on the FastAPI app, this returns the plugin
-        # manager's bus, so SYNC_COMPLETED fires (graph-cache invalidation +
-        # plugin subscribers), matching the REST path. In standalone stdio/http
-        # transport it returns None and emission is a graceful no-op.
-        task = asyncio.create_task(
-            run_connection_sync(
-                sync_id=sync_id,
-                connection_id=connection_id,
-                connector_type=connector_type,
-                config=conn["config"],
-                workspace_id=ws_id,
-                store=store,
-                event_bus=get_activity_bus(),
-                force_full=force_full,
-                last_synced_at=last_synced_dt,
+            last_synced_iso = conn.get("last_synced_at")
+            last_synced_dt: datetime | None = None
+            if last_synced_iso:
+                try:
+                    last_synced_dt = datetime.fromisoformat(last_synced_iso)
+                except (ValueError, TypeError):
+                    last_synced_dt = None
+
+            # Wire the EventBus the same way the memory tools do (mcp/server.py):
+            # when /mcp is mounted on the FastAPI app, this returns the plugin
+            # manager's bus, so SYNC_COMPLETED fires (graph-cache invalidation +
+            # plugin subscribers), matching the REST path. In standalone stdio/http
+            # transport it returns None and emission is a graceful no-op.
+            task = asyncio.create_task(
+                run_connection_sync(
+                    sync_id=sync_id,
+                    connection_id=connection_id,
+                    connector_type=connector_type,
+                    config=conn["config"],
+                    workspace_id=ws_id,
+                    store=store,
+                    event_bus=get_activity_bus(),
+                    force_full=force_full,
+                    last_synced_at=last_synced_dt,
+                )
             )
-        )
-        _SYNC_TASKS.add(task)
-        task.add_done_callback(_SYNC_TASKS.discard)
+            _SYNC_TASKS.add(task)
+            task.add_done_callback(_SYNC_TASKS.discard)
+            spawned = True
+        finally:
+            if not spawned:
+                await release_unstarted_sync_claim(
+                    store,
+                    connection_id,
+                    sync_id=created_sync_id,
+                    message="Sync could not start. Please retry.",
+                )
 
         return SourceSyncResponse(
             status="sync_started",

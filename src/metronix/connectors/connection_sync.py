@@ -54,6 +54,57 @@ async def _persist_cursor(
         logger.warning("sync.cursor_save_failed", connection_id=connection_id, error=str(e))
 
 
+async def release_unstarted_sync_claim(
+    store: PostgresStore,
+    connection_id: str,
+    *,
+    sync_id: str | None,
+    message: str,
+) -> None:
+    """Undo a claim that never produced a running ``run_connection_sync`` task.
+
+    Every sync entry point (autosync tick, REST ``trigger_sync``,
+    ``metronix_source_sync``) marks ``connections.status='syncing'`` and may
+    pre-insert a ``running`` ``sync_logs`` row *before* the background task
+    is actually scheduled. If something fails in that window (connection
+    vanished, decrypt/config error, any unexpected exception) and the task
+    is never spawned, both are orphaned:
+
+    * the connection lock blocks every later manual sync until the next API
+      restart runs ``recover_interrupted_syncs`` (#401);
+    * the ``sync_logs`` row stays ``running`` forever — ``has_running_sync``
+      then reports the connection as genuinely busy even though nothing is
+      running, so no caller can ever safely proceed (#425).
+
+    Call this from a ``finally`` guarding that window, once it's known the
+    task was never spawned. Moves the connection to a terminal ``error``
+    (a retry is accepted immediately) and finalizes the log row as
+    ``failed``, mirroring ``recover_interrupted_syncs``. Each failure here is
+    logged and swallowed — releasing the claim is itself best-effort cleanup
+    and must never raise into the caller's own error handling.
+    """
+    try:
+        await store.update_connection_status(connection_id, status="error", error_message=message)
+    except Exception:
+        logger.warning(
+            "sync.claim_release_failed",
+            connection_id=connection_id,
+            exc_info=True,
+        )
+
+    if sync_id is None:
+        return
+    try:
+        await store.update_sync_log(sync_id, status="failed", errors=[message])
+    except Exception:
+        logger.warning(
+            "sync.sync_log_finalize_failed",
+            connection_id=connection_id,
+            sync_id=sync_id,
+            exc_info=True,
+        )
+
+
 # Module-level registry instance
 _registry: ConnectorRegistry | None = None
 

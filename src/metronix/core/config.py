@@ -505,24 +505,6 @@ class Settings(BaseSettings):
         description="Maximum number of autosync tasks that may run concurrently per API process.",
     )
 
-    # --- Manual-sync stale-lock reclaim (#401) ---
-    sync_stale_lock_minutes: int = Field(
-        default=60,
-        ge=5,
-        alias="METRONIX_SYNC_STALE_LOCK_MINUTES",
-        description=(
-            "Grace period before a connection stuck in status='syncing' is "
-            "treated as a stale lock, letting a new manual sync "
-            "(metronix_source_sync / POST /connections/{id}/sync/) proceed "
-            "instead of being rejected. sync_logs has no heartbeat column, so a "
-            "run's liveness is judged only by its start time (created_at): a "
-            "sync whose task was killed (API restart, SIGKILL) or hung "
-            "otherwise blocks every later manual sync until the next restart's "
-            "recover_interrupted_syncs. Default is the documented worst-case "
-            "sync duration (~1h); minimum 5."
-        ),
-    )
-
     # --- Graph sweeper ---
     graph_sweep_enabled: bool = Field(
         default=True,

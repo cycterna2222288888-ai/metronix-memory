@@ -38,7 +38,9 @@ DEFAULT_SYNC_CRON = "0 3 * * *"
 
 # Stamped on the connection and its pre-inserted sync_logs row when an autosync
 # claim is released without ever handing off to ``run_connection_sync`` (#425).
-# Sibling of ``recovery._INTERRUPTED_MSG`` / ``postgres._STALE_SYNC_LOCK_MSG``.
+# Sibling of ``recovery._INTERRUPTED_MSG``; passed to
+# ``connection_sync.release_unstarted_sync_claim`` (shared with the REST and
+# MCP manual-sync entry points, which stamp their own equivalent message).
 _UNSTARTED_SYNC_MSG = "Autosync could not start the sync. Please retry."
 
 
@@ -202,9 +204,10 @@ class AutosyncScheduler:
         # must put the status back AND finalize the sync_logs row we pre-insert
         # below — otherwise the connection is wedged in 'syncing' until the next
         # API restart runs recover_interrupted_syncs (manual metronix_source_sync
-        # stays blocked the whole time, #401), and the 'running' log row keeps
-        # the workspace flagged busy for the graph sweeper (#425). See
-        # _release_unstarted_claim.
+        # stays blocked the whole time, #401), and the 'running' log row makes
+        # has_running_sync() report the connection as genuinely busy forever,
+        # since nothing else can ever reclaim a 'running' row on a time basis
+        # (#425 — see connection_sync.release_unstarted_sync_claim, called below).
         spawned = False
         created_sync_id: str | None = None
         try:
@@ -289,59 +292,16 @@ class AutosyncScheduler:
             )
         finally:
             if not spawned:
-                await self._release_unstarted_claim(connection_id, sync_id=created_sync_id)
+                # Lazy import: mirrors the run_connection_sync import above —
+                # the sync orchestration lives in connectors.connection_sync (L3).
+                from metronix.connectors.connection_sync import release_unstarted_sync_claim
 
-    async def _release_unstarted_claim(
-        self, connection_id: str, *, sync_id: str | None = None
-    ) -> None:
-        """Undo a claim that never produced a running sync task.
-
-        ``claim_connection_for_autosync`` set ``connections.status='syncing'``
-        and ``_process_due_row`` may already have pre-inserted a ``running``
-        ``sync_logs`` row. If we bail before ``run_connection_sync`` is
-        scheduled (the row vanished, a decrypt failure, a missing ``config``,
-        any unexpected error) both are orphaned:
-
-        * the connection lock blocks every manual ``metronix_source_sync``
-          until the next API restart runs ``recover_interrupted_syncs`` (#401);
-        * the ``sync_logs`` row stays ``running`` forever —
-          ``list_workspaces_with_running_sync`` keeps the workspace flagged busy
-          so the graph sweeper skips it, and the manual stale-lock cleanup never
-          fires because it only runs while the connection is still ``syncing``
-          (#425).
-
-        Move the connection to a terminal ``error`` (a retry is then accepted
-        right away and the scheduler re-picks it at the next cron slot) and
-        finalize the log row as ``failed``, mirroring ``recover_interrupted_syncs``.
-        """
-        try:
-            await self._store.update_connection_status(
-                connection_id,
-                status="error",
-                error_message=_UNSTARTED_SYNC_MSG,
-            )
-        except Exception:
-            logger.warning(
-                "autosync.tick.claim_release_failed",
-                connection_id=connection_id,
-                exc_info=True,
-            )
-
-        if sync_id is None:
-            return
-        try:
-            await self._store.update_sync_log(
-                sync_id,
-                status="failed",
-                errors=[_UNSTARTED_SYNC_MSG],
-            )
-        except Exception:
-            logger.warning(
-                "autosync.tick.sync_log_finalize_failed",
-                connection_id=connection_id,
-                sync_id=sync_id,
-                exc_info=True,
-            )
+                await release_unstarted_sync_claim(
+                    self._store,
+                    connection_id,
+                    sync_id=created_sync_id,
+                    message=_UNSTARTED_SYNC_MSG,
+                )
 
     async def cancel_inflight(self) -> None:
         """Best-effort cancellation of in-flight sync tasks on shutdown.
