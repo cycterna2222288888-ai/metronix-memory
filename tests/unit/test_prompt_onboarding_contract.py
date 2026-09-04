@@ -91,3 +91,22 @@ def test_prompt_2_denial_path_stops_before_editing_the_policy_file(path: Path) -
     assert "STOP" in content
     assert "Do NOT edit" in content
     assert "recovery path" in content or "recover" in content
+
+
+@pytest.mark.parametrize("path", PROMPT_2_DOCS)
+def test_prompt_2_treats_every_error_as_denial_not_just_auth_required(path: Path) -> None:
+    """#450's review: the old criterion ("no error field, or error.code is
+    anything other than AUTH_REQUIRED") reads any non-AUTH_REQUIRED error as
+    success. test_memory_list_preflight_contract.py proves an authenticated,
+    grant-less principal is denied with WORKSPACE_NOT_FOUND, not
+    AUTH_REQUIRED — the doc text must name that failure explicitly, and stop
+    on a bad/missing response generally, not only on the one code.
+    """
+    content = _normalized(path.read_text())
+
+    assert "WORKSPACE_NOT_FOUND" in content
+    assert "INVALID_PARAMS" in content
+    assert "INTERNAL_ERROR" in content
+    assert "non-2xx" in content
+    assert "not being available as a tool" in content
+    assert "do not special-case" in content.lower()

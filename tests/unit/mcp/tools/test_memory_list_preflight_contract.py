@@ -2,14 +2,18 @@
 
 Codex/Hermes prompt-2 now gates its AGENTS.md/SOUL.md write on a
 ``metronix_memory_list`` preflight call (see docs/integrations/{codex,hermes}
-/prompt-2-memory.md, step 3). This proves the two outcomes that preflight
+/prompt-2-memory.md, step 3). This proves the outcomes that preflight
 depends on, at the real tool boundary rather than the transport layer alone:
 
 - a shared-key (no-principal) caller is denied with AUTH_REQUIRED before any
   store access, so a prompt-following agent stops before writing the file;
 - an authenticated administrator (admin_override, no explicit grant needed)
   gets a clean, error-free response — including when the workspace/agent has
-  no memory yet, so an empty list is never misread as denial.
+  no memory yet, so an empty list is never misread as denial;
+- an authenticated principal with no grant on the requested workspace is
+  denied with WORKSPACE_NOT_FOUND, not AUTH_REQUIRED (#450's review) — the
+  fail-closed preflight wording must stop on this too, not just on
+  AUTH_REQUIRED.
 
 Exercises the real ``AuthorizationEvaluator`` (not a stub) for the admin path
 so the ``admin_override`` reasoning documented in #432 is actually proven, not
@@ -126,3 +130,42 @@ async def test_admin_principal_preflight_succeeds_via_admin_override(
 
     assert "error" not in out
     assert out["records"] == []
+
+
+@pytest.mark.asyncio
+async def test_grantless_principal_preflight_fails_with_a_non_auth_error(
+    real_evaluator: AuthorizationEvaluator,
+) -> None:
+    """A non-AUTH_REQUIRED failure must stop the preflight just as hard (#450).
+
+    ``resolve_workspace_id`` checks the principal's workspace grants *before*
+    ``require_agent_access`` ever runs. An authenticated, non-admin principal
+    with no grant on the requested workspace is therefore denied with
+    WORKSPACE_NOT_FOUND, not AUTH_REQUIRED. The old prompt-2 wording ("no
+    error field, or error.code is anything other than AUTH_REQUIRED") would
+    have misread this exact response as success and let the agent proceed to
+    edit AGENTS.md/SOUL.md. Proves both that the error code really is
+    something other than AUTH_REQUIRED, and that the memory store is never
+    reached — the same "stops before writing" property the AUTH_REQUIRED case
+    proves above, for a different failure.
+    """
+    from metronix.mcp.tools.memory_list import metronix_memory_list
+
+    token = bind_principal(
+        MCPPrincipal("user-1", "user", ("OTHER_WORKSPACE",), auth_method="personal_api_key")
+    )
+    try:
+        with patch(
+            "metronix.mcp.tools.memory_list._memory_deps.build_memory_service_for_workspace",
+            new=AsyncMock(),
+        ) as build_service:
+            out = await metronix_memory_list(
+                workspace_id="MTRNIX", agent_id="onboarding-agent", limit=1
+            )
+    finally:
+        reset_principal(token)
+
+    assert "error" in out
+    assert out["error"]["code"] == "WORKSPACE_NOT_FOUND"
+    assert out["error"]["code"] != "AUTH_REQUIRED"
+    build_service.assert_not_awaited()
