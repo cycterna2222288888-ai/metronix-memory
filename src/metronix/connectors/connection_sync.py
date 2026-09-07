@@ -339,8 +339,17 @@ async def run_connection_sync(
                     payload={"connector_type": connector_type, "source_id": src_id},
                 )
 
-        # Phase 2: Ingest into Qdrant (only new/updated docs, skip unchanged)
-        if upsert_result and upsert_result.get("changed_source_ids"):
+        # Phase 2: Ingest into Qdrant. Every ingest is delete-before-add per
+        # doc_label (``incremental=True``): Qdrant point ids are random UUIDs,
+        # so re-ingesting a document without first dropping its old points
+        # duplicates every chunk (#461). ``delete_by_doc_labels`` is a cheap
+        # no-op for a genuinely new document that has no points yet.
+        if upsert_result is None:
+            # Phase 1 persist failed — we do not know what changed. Writing to
+            # Qdrant on top of an unknown PG state is worse than skipping.
+            docs_to_ingest = []
+            errors_list.append("raw_documents persist failed; Qdrant ingest skipped")
+        elif upsert_result.get("changed_source_ids"):
             changed_ids = set(upsert_result["changed_source_ids"])
             docs_to_ingest = [d for d in documents if d.source_id in changed_ids]
             logger.info(
@@ -350,7 +359,10 @@ async def run_connection_sync(
                 skipped=len(documents) - len(docs_to_ingest),
             )
         else:
-            docs_to_ingest = documents
+            # Nothing new or changed — Qdrant already holds these chunks;
+            # re-ingesting would duplicate them (#461).
+            docs_to_ingest = []
+            logger.info("sync.nothing_to_ingest", total=len(documents))
 
         if docs_to_ingest:
             result = await ingest_documents(
@@ -359,6 +371,7 @@ async def run_connection_sync(
                 connector_type,
                 source_role=connector.source_role,
                 skip_graph=True,
+                incremental=True,
             )
             documents_new = result.documents_new
             documents_updated = result.documents_updated
@@ -383,6 +396,8 @@ async def run_connection_sync(
                     )
             except Exception as e:
                 logger.warning("sync.mark_synced.error", error=str(e))
+        elif upsert_result is None:
+            status = "failed"
         else:
             status = "success"
 

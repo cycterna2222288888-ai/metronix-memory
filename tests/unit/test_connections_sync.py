@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from metronix.connectors.connection_sync import run_connection_sync
 from metronix.core.config import Settings
+from metronix.core.interfaces import ConnectorInterface
 from metronix.core.models import Document, SyncResult
 from metronix.storage.pg_connection import get_session
 from metronix.storage.pg_models import ConnectionRow, SyncLogRow
@@ -273,6 +274,156 @@ async def test_run_connection_sync_marks_failed_on_exception(store, seeded_ids):
         assert any("Jira 500" in e for e in row.errors)
         assert conn.status == "error"
         assert "Jira 500" in (conn.error_message or "")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — delete-before-add, and don't re-ingest what hasn't changed (#461)
+#
+# These run without a live PG: ``store`` is a mock and the sync's terminal
+# writes are asserted on the mock rather than on DB rows.
+# ---------------------------------------------------------------------------
+
+
+def _doc(ws: str, source_id: str = "J-1") -> Document:
+    return Document(
+        source_type="jira",
+        source_id=source_id,
+        url="",
+        workspace_id=ws,
+        title="t",
+        content="c",
+        author="a",
+        metadata={},
+    )
+
+
+def _mock_connector(docs: list[Document]) -> MagicMock:
+    # spec=ConnectorInterface → no load_cursor/take_cursor, so the cursor
+    # helpers skip (no get_connector_state / set_connector_state needed).
+    c = MagicMock(spec=ConnectorInterface)
+    c.source_role = "task_tracker"
+    c.configure = AsyncMock()
+    c.fetch = AsyncMock(return_value=docs)
+    return c
+
+
+def _mock_store(upsert: AsyncMock) -> MagicMock:
+    store = MagicMock()
+    store.upsert_raw_documents = upsert
+    store.get_raw_document = AsyncMock(return_value=None)
+    store.mark_documents_synced_by_source = AsyncMock()
+    store.update_sync_log = AsyncMock()
+    store.update_connection_status = AsyncMock()
+    return store
+
+
+def _synced_status(store: MagicMock) -> tuple[str | None, str | None]:
+    """(sync_logs status, connections status) from the terminal writes."""
+    log_status = store.update_sync_log.await_args.kwargs.get("status")
+    conn_status = store.update_connection_status.await_args.kwargs.get("status")
+    return log_status, conn_status
+
+
+@pytest.mark.asyncio
+async def test_phase2_ingests_with_delete_before_add() -> None:
+    """#461: the connector sync path must pass ``incremental=True`` so a doc's
+    old Qdrant points are dropped before re-add — random-UUID points otherwise
+    accumulate a second full copy of every chunk."""
+    store = _mock_store(
+        AsyncMock(
+            return_value={"new": 1, "updated": 0, "unchanged": 0, "changed_source_ids": ["J-1"]}
+        )
+    )
+    mock_ingest = AsyncMock(return_value=_empty_ingest_result())
+    registry = MagicMock(create=MagicMock(return_value=_mock_connector([_doc("ws1")])))
+
+    with (
+        patch("metronix.connectors.connection_sync.get_registry", return_value=registry),
+        patch("metronix.ingestion.pipeline.ingest_documents", mock_ingest),
+        patch(
+            "metronix.ingestion.pipeline.process_all_unsynced_graphs",
+            AsyncMock(return_value={"ok": 0, "errors": 0}),
+        ),
+    ):
+        await run_connection_sync(
+            sync_id="s1",
+            connection_id="c1",
+            connector_type="jira",
+            config={"url": "http://x"},
+            workspace_id="ws1",
+            store=store,
+            event_bus=None,
+        )
+
+    mock_ingest.assert_awaited_once()
+    assert mock_ingest.await_args.kwargs.get("incremental") is True
+
+
+@pytest.mark.asyncio
+async def test_phase2_skips_ingest_when_nothing_changed() -> None:
+    """#461: an unchanged re-fetch (force_full / second connector on the same
+    source / cursor reset / CQL-JQL minute boundary) must NOT re-ingest —
+    Qdrant already holds these chunks."""
+    store = _mock_store(
+        AsyncMock(return_value={"new": 0, "updated": 0, "unchanged": 1, "changed_source_ids": []})
+    )
+    mock_ingest = AsyncMock(return_value=_empty_ingest_result())
+    registry = MagicMock(create=MagicMock(return_value=_mock_connector([_doc("ws1")])))
+
+    with (
+        patch("metronix.connectors.connection_sync.get_registry", return_value=registry),
+        patch("metronix.ingestion.pipeline.ingest_documents", mock_ingest),
+        patch(
+            "metronix.ingestion.pipeline.process_all_unsynced_graphs",
+            AsyncMock(return_value={"ok": 0, "errors": 0}),
+        ),
+    ):
+        await run_connection_sync(
+            sync_id="s2",
+            connection_id="c2",
+            connector_type="jira",
+            config={"url": "http://x"},
+            workspace_id="ws1",
+            store=store,
+            event_bus=None,
+        )
+
+    mock_ingest.assert_not_awaited()
+    log_status, conn_status = _synced_status(store)
+    assert log_status == "success"
+    assert conn_status == "active"
+
+
+@pytest.mark.asyncio
+async def test_phase2_failed_persist_is_not_reported_as_success() -> None:
+    """A raw_documents persist failure must not be masked as a successful sync,
+    and must not trigger a full re-ingest on top of an unknown PG state (#461)."""
+    store = _mock_store(AsyncMock(side_effect=RuntimeError("raw_documents INSERT failed")))
+    mock_ingest = AsyncMock(return_value=_empty_ingest_result())
+    registry = MagicMock(create=MagicMock(return_value=_mock_connector([_doc("ws1")])))
+
+    with (
+        patch("metronix.connectors.connection_sync.get_registry", return_value=registry),
+        patch("metronix.ingestion.pipeline.ingest_documents", mock_ingest),
+        patch(
+            "metronix.ingestion.pipeline.process_all_unsynced_graphs",
+            AsyncMock(return_value={"ok": 0, "errors": 0}),
+        ),
+    ):
+        await run_connection_sync(
+            sync_id="s3",
+            connection_id="c3",
+            connector_type="jira",
+            config={"url": "http://x"},
+            workspace_id="ws1",
+            store=store,
+            event_bus=None,
+        )
+
+    mock_ingest.assert_not_awaited()
+    log_status, conn_status = _synced_status(store)
+    assert log_status != "success"
+    assert conn_status == "error"
 
 
 async def test_run_connection_sync_failed_does_not_advance_cursor(store, seeded_ids):
