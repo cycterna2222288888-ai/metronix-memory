@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
-from metronix.connectors.confluence import ConfluenceConnector
+from metronix.connectors.confluence import ConfluenceConnector, _iter_pages
 from metronix.connectors.confluence_processing import process_confluence_page
 from metronix.connectors.jira import JiraConnector
 from metronix.core.interfaces import ConnectorInterface
@@ -211,3 +213,127 @@ class TestConfluenceFetchPostFilter:
             since=since,
         )
         assert len(docs) == 1
+
+
+# ---------------------------------------------------------------------------
+# _iter_pages — normalise get_all_pages_from_space across library majors (#460)
+# ---------------------------------------------------------------------------
+
+
+class TestIterPages:
+    def test_list_passes_through(self) -> None:
+        assert list(_iter_pages([{"id": "1"}, {"id": "2"}])) == [{"id": "1"}, {"id": "2"}]
+
+    def test_generator_passes_through(self) -> None:
+        gen = (p for p in [{"id": "1"}, {"id": "2"}])
+        assert list(_iter_pages(gen)) == [{"id": "1"}, {"id": "2"}]
+
+    def test_results_dict_is_unwrapped(self) -> None:
+        assert list(_iter_pages({"results": [{"id": "1"}], "size": 1})) == [{"id": "1"}]
+
+    def test_dict_without_results_is_empty(self) -> None:
+        assert list(_iter_pages({"size": 0})) == []
+
+    def test_none_is_empty(self) -> None:
+        assert list(_iter_pages(None)) == []
+
+
+# ---------------------------------------------------------------------------
+# _fetch_full — must not call len() on the 5.x paginator (#460)
+# ---------------------------------------------------------------------------
+
+
+class TestConfluenceFetchFull:
+    @staticmethod
+    def _connector() -> ConfluenceConnector:
+        c = ConfluenceConnector()
+        c._config = {
+            "url": "https://co.atlassian.net",
+            "space_key": "ENG",
+            "username": "u",
+            "api_token": "t",
+        }
+        c._client = MagicMock()
+        return c
+
+    def _run(self, connector: ConfluenceConnector, space_key: str = "ENG") -> list:
+        return connector._fetch_full(
+            workspace_id="ws1",
+            base_url="https://co.atlassian.net",
+            space_key=space_key,
+        )
+
+    def test_generator_result_is_fully_consumed(self) -> None:
+        """atlassian-python-api 5.x returns a generator — the #460 crash case."""
+        connector = self._connector()
+        connector._client.get_all_pages_from_space.return_value = (
+            _page(str(i), "2026-05-12T22:09:28.000Z") for i in range(3)
+        )
+
+        docs = self._run(connector)
+
+        assert [d.source_id for d in docs] == ["0", "1", "2"]
+        # one call, no per-page start/limit paging
+        connector._client.get_all_pages_from_space.assert_called_once()
+
+    def test_list_result_still_works(self) -> None:
+        """<= 4.x returned a list — the normaliser keeps that path working."""
+        connector = self._connector()
+        connector._client.get_all_pages_from_space.return_value = [
+            _page("10", "2026-05-12T22:09:28.000Z"),
+            _page("11", "2026-05-12T22:09:28.000Z"),
+        ]
+
+        docs = self._run(connector)
+
+        assert [d.source_id for d in docs] == ["10", "11"]
+
+    def test_empty_generator_yields_no_documents(self) -> None:
+        connector = self._connector()
+        connector._client.get_all_pages_from_space.return_value = iter(())
+
+        assert self._run(connector) == []
+
+    def test_dict_result_is_unwrapped(self) -> None:
+        connector = self._connector()
+        connector._client.get_all_pages_from_space.return_value = {
+            "results": [_page("20", "2026-05-12T22:09:28.000Z")],
+        }
+
+        docs = self._run(connector)
+        assert [d.source_id for d in docs] == ["20"]
+
+    def test_one_bad_page_does_not_abort_the_batch(self) -> None:
+        connector = self._connector()
+        connector._client.get_all_pages_from_space.return_value = iter(
+            [
+                _page("30", "2026-05-12T22:09:28.000Z"),
+                None,  # a malformed page — _page_to_document raises on .get()
+                _page("32", "2026-05-12T22:09:28.000Z"),
+            ]
+        )
+
+        docs = self._run(connector)
+        assert [d.source_id for d in docs] == ["30", "32"]
+
+    def test_no_space_key_passes_none(self) -> None:
+        connector = self._connector()
+        connector._client.get_all_pages_from_space.return_value = iter(())
+
+        self._run(connector, space_key="")
+
+        args, kwargs = connector._client.get_all_pages_from_space.call_args
+        assert args[0] is None
+
+    def test_rate_limit_mid_stream_propagates(self) -> None:
+        """The 5.x paginator cannot be resumed after a sleep — a 429 fails the sync."""
+        connector = self._connector()
+
+        def _boom() -> object:
+            yield _page("40", "2026-05-12T22:09:28.000Z")
+            raise RuntimeError("429 Too Many Requests")
+
+        connector._client.get_all_pages_from_space.return_value = _boom()
+
+        with pytest.raises(RuntimeError, match="429"):
+            self._run(connector)
