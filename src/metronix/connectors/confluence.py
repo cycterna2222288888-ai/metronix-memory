@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import contextlib
 import time
+from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 
 import structlog
 
@@ -19,6 +21,28 @@ from metronix.core.interfaces import ConnectorInterface
 from metronix.core.models import Connection, Document
 
 logger = structlog.get_logger()
+
+
+def _iter_pages(result: Any) -> Iterator[dict[str, Any]]:
+    """Normalise ``get_all_pages_from_space``'s return value to an iterator of pages.
+
+    ``atlassian-python-api`` changed this method's contract across majors:
+
+    * ``<= 3.41`` — a ``list``: one page slab of up to ``limit`` items; the
+      caller paginated with ``start`` / ``limit``.
+    * ``4.0.4 - 4.0.7`` — a ``list``: every page, auto-paginated internally.
+    * ``>= 5.0.0`` — a **generator** that walks ``_links.next`` across all pages
+      (upstream PR #1616). ``len()`` on it raises
+      ``TypeError: object of type 'generator' has no len()`` — issue #460.
+
+    A raw ``{"results": [...]}`` dict is also tolerated defensively. The result
+    is always iterated exactly once, so a generator is safe to pass through.
+    """
+    if result is None:
+        return iter(())
+    if isinstance(result, dict):
+        return iter(result.get("results", []))
+    return iter(result)
 
 
 class ConfluenceConnector(ConnectorInterface):
@@ -68,49 +92,38 @@ class ConfluenceConnector(ConnectorInterface):
         base_url: str,
         space_key: str,
     ) -> list[Document]:
-        """Full sync using content API (returns body.storage)."""
+        """Full sync — walk every page in the space (``body.storage`` expanded).
+
+        ``get_all_pages_from_space`` is a lazily-paginated generator in
+        atlassian-python-api 5.x (it follows ``_links.next`` internally); it was
+        a plain list in <= 4.x. ``_iter_pages`` normalises both, so we iterate
+        once — no manual ``start`` / ``limit`` paging and no ``len()`` (see #460).
+
+        The pre-5.x inline per-batch 429 retry is gone: the 5.x paginator raises
+        from inside iteration and cannot be resumed after a sleep. A rate limit
+        (or any transport error) now fails the full sync — ``last_synced_at`` is
+        not advanced and the next scheduled run retries from scratch. Callers
+        that need transparent backoff can enable it at the client level
+        (``backoff_and_retry=True``); tracked separately.
+        """
         documents: list[Document] = []
-        start, limit = 0, 25
         expand = "body.storage,version,history"
+        space_arg = space_key or None
 
-        while True:
-            try:
-                if space_key:
-                    pages = self._client.get_all_pages_from_space(
-                        space_key,
-                        start=start,
-                        limit=limit,
-                        expand=expand,
-                    )
-                else:
-                    pages = self._client.get_all_pages_from_space(
-                        None,
-                        start=start,
-                        limit=limit,
-                        expand=expand,
-                    )
-            except Exception as e:
-                if "429" in str(e) or "Too Many" in str(e):
-                    logger.warning("confluence.rate_limit", start=start)
-                    time.sleep(4)
-                    continue
-                raise
+        pages = self._client.get_all_pages_from_space(space_arg, limit=25, expand=expand)
 
-            if not pages:
-                break
-
-            for page in pages:
+        try:
+            for page in _iter_pages(pages):
                 try:
                     doc = self._page_to_document(page, workspace_id, base_url, space_key)
                     documents.append(doc)
                 except Exception as e:
+                    # one bad page must not abort the whole sync
                     logger.warning("confluence.page.error", error=str(e))
-
-            if len(pages) < limit:
-                break
-            start += limit
-            if len(documents) % 50 < limit:
-                logger.info("confluence.fetch.progress", pages=len(documents))
+        except Exception as e:
+            if "429" in str(e) or "Too Many" in str(e):
+                logger.warning("confluence.rate_limit", fetched=len(documents))
+            raise
 
         logger.info("confluence.fetch.done", pages=len(documents))
         return documents
