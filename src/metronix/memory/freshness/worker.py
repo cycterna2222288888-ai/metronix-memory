@@ -486,10 +486,9 @@ async def _build_worker() -> FreshnessWorker:
     from metronix.freshness.stages.reconciler import Reconciler
     from metronix.ingestion.freshness.target_raw_document import RawDocumentTarget
     from metronix.memory.freshness.target_memory import MemoryTarget
+    from metronix.storage.factory import build_document_store, build_memory_store
     from metronix.storage.freshness_pg import FreshnessStore
-    from metronix.storage.memory_postgres import MemoryPostgresStore
     from metronix.storage.memory_qdrant import MemoryQdrantStore
-    from metronix.storage.postgres import PostgresStore
     from metronix.storage.qdrant import AsyncQdrantVectorStore
     from metronix.storage.redis import RedisStore
 
@@ -497,7 +496,7 @@ async def _build_worker() -> FreshnessWorker:
     redis = RedisStore(settings.redis_url)
     coordination = CoordinationStore(redis=redis)
     engine = create_async_engine(settings.postgres_dsn, pool_pre_ping=True)
-    memory_pg_store = MemoryPostgresStore(engine)
+    memory_pg_store = build_memory_store(engine)
     freshness_store = FreshnessStore(engine)
 
     # --- Memory pipeline ---
@@ -542,7 +541,7 @@ async def _build_worker() -> FreshnessWorker:
     )
 
     # --- KB pipeline ---
-    kb_pg_store = PostgresStore(settings.postgres_dsn)
+    kb_pg_store = build_document_store(settings.postgres_dsn)
     _kb_qdrant_cache: dict[str, AsyncQdrantVectorStore] = {}
 
     def kb_qdrant_factory(ws: str) -> AsyncQdrantVectorStore:
