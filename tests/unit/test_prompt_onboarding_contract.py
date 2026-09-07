@@ -75,13 +75,14 @@ def test_prompt_2_preflight_precedes_the_policy_file_write(path: Path) -> None:
 @pytest.mark.parametrize("path", PROMPT_2_DOCS)
 def test_prompt_2_empty_memory_list_is_not_treated_as_denial(path: Path) -> None:
     """First fork resolved explicitly in the doc text (see #433's PR description):
-    success is the absence of AUTH_REQUIRED, not a non-empty records list.
+    an empty ``records`` list is success (no memory stored yet), not a denial —
+    and only the explicit Pass counts, everything else is a failure.
     """
     content = _normalized(path.read_text())
 
     assert "AUTH_REQUIRED" in content
-    assert "empty" in content and "not a failure" in content
-    assert "do not treat" in content.lower() or "not treat" in content.lower()
+    assert "empty `records` list" in content and "is a pass, not a denial" in content
+    assert "treat everything else as a failure" in content
 
 
 @pytest.mark.parametrize("path", PROMPT_2_DOCS)
