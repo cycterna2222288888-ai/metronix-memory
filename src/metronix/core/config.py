@@ -183,6 +183,18 @@ class Settings(BaseSettings):
     default_workspace_name: str = Field("MTRNIX", alias="DEFAULT_WORKSPACE_NAME")
     workspace_persistence: str = Field("neo4j", alias="WORKSPACE_PERSISTENCE")
 
+    # --- Storage backend (edition split — see docs/STORAGE.md) ---
+    storage_backend: str = Field(
+        "postgres",
+        alias="STORAGE_BACKEND",
+        description=(
+            "Relational storage backend. 'postgres' is the only implementation "
+            "today; the knob exists so a future lightweight (single-user) edition "
+            "can add one without re-touching call sites. Constructed via "
+            "metronix.storage.factory."
+        ),
+    )
+
     # --- Search tuning ---
     search_max_total_chars: int = Field(40000, alias="SEARCH_MAX_TOTAL_CHARS")
     search_max_fragment_chars: int = Field(8000, alias="SEARCH_MAX_FRAGMENT_CHARS")
@@ -616,6 +628,18 @@ class Settings(BaseSettings):
         allowed = {"development", "staging", "production"}
         if v not in allowed:
             msg = f"env must be one of {allowed}, got '{v}'"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("storage_backend")
+    @classmethod
+    def validate_storage_backend(cls, v: str) -> str:
+        allowed = {"postgres"}
+        if v not in allowed:
+            msg = (
+                f"storage_backend must be one of {sorted(allowed)}, got '{v}'. "
+                "Only PostgreSQL is implemented today — see docs/STORAGE.md."
+            )
             raise ValueError(msg)
         return v
 

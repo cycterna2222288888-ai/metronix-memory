@@ -11,6 +11,7 @@ Underscore prefix intentional — internal to ``mcp/tools``.
 from __future__ import annotations
 
 from metronix.core.config import get_settings
+from metronix.storage.factory import build_document_store
 from metronix.storage.postgres import PostgresStore
 
 _STORE: PostgresStore | None = None
@@ -26,7 +27,7 @@ def get_store() -> PostgresStore:
     """
     global _STORE
     if _STORE is None:
-        _STORE = PostgresStore(get_settings().postgres_dsn)
+        _STORE = build_document_store(get_settings().postgres_dsn)
     return _STORE
 
 

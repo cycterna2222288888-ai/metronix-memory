@@ -1205,10 +1205,11 @@ connect_agent() {
 }
 
 # Return the value .env.example ships for a given key (empty if absent).
-# Strips trailing inline comments so the placeholder check matches bare values.
+# .env.example keeps comments on their own line (issue #458), so the value is
+# taken verbatim; only trailing whitespace is trimmed as a guard.
 example_val() {
   grep -E "^$1=" "$EXAMPLE_FILE" 2>/dev/null | head -1 | cut -d= -f2- \
-    | sed 's/[[:space:]]#.*//' | sed 's/[[:blank:]]*$//'
+    | sed 's/[[:blank:]]*$//'
 }
 
 # Is $2 a real, reusable value for secret $1 — i.e. something safe to KEEP instead of
