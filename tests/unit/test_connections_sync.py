@@ -312,6 +312,7 @@ def _mock_store(upsert: AsyncMock) -> MagicMock:
     store.upsert_raw_documents = upsert
     store.get_raw_document = AsyncMock(return_value=None)
     store.mark_documents_synced_by_source = AsyncMock()
+    store.mark_documents_graph_unsynced_by_source = AsyncMock()
     store.update_sync_log = AsyncMock()
     store.update_connection_status = AsyncMock()
     return store
@@ -322,6 +323,11 @@ def _synced_status(store: MagicMock) -> tuple[str | None, str | None]:
     log_status = store.update_sync_log.await_args.kwargs.get("status")
     conn_status = store.update_connection_status.await_args.kwargs.get("status")
     return log_status, conn_status
+
+
+def _sync_log_errors(store: MagicMock) -> list[str]:
+    """The ``errors`` list handed to the terminal sync_logs write."""
+    return list(store.update_sync_log.await_args.kwargs.get("errors") or [])
 
 
 @pytest.mark.asyncio
@@ -397,7 +403,8 @@ async def test_phase2_skips_ingest_when_nothing_changed() -> None:
 @pytest.mark.asyncio
 async def test_phase2_failed_persist_is_not_reported_as_success() -> None:
     """A raw_documents persist failure must not be masked as a successful sync,
-    and must not trigger a full re-ingest on top of an unknown PG state (#461)."""
+    and must not trigger a full re-ingest on top of an unknown PG state (#461).
+    The captured (sanitized) persist error is carried into the sync_logs row."""
     store = _mock_store(AsyncMock(side_effect=RuntimeError("raw_documents INSERT failed")))
     mock_ingest = AsyncMock(return_value=_empty_ingest_result())
     registry = MagicMock(create=MagicMock(return_value=_mock_connector([_doc("ws1")])))
@@ -424,6 +431,54 @@ async def test_phase2_failed_persist_is_not_reported_as_success() -> None:
     log_status, conn_status = _synced_status(store)
     assert log_status != "success"
     assert conn_status == "error"
+    errors = _sync_log_errors(store)
+    assert any("persist failed" in e and "raw_documents INSERT failed" in e for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_phase2_sidecar_refresh_reenqueues_graph_extraction() -> None:
+    """#461 regression: a sidecar-only refresh (#440) — content unchanged, so
+    ``upsert_raw_documents`` leaves ``graph_synced=true``, but the ``source_id``
+    is still returned in ``changed_source_ids`` — hits the ``incremental=True``
+    ``skip_graph=True`` re-ingest, which deletes the doc's graph node. The sync
+    must force that source id ``graph_synced=false`` so the decoupled sweeper
+    rebuilds it; otherwise the graph node is lost until the next content change.
+    """
+    store = _mock_store(
+        AsyncMock(
+            # counted as unchanged, but still flagged for re-ingest — the
+            # sidecar-drift shape from PostgresStore.upsert_raw_documents.
+            return_value={"new": 0, "updated": 0, "unchanged": 1, "changed_source_ids": ["J-1"]}
+        )
+    )
+    mock_ingest = AsyncMock(return_value=_empty_ingest_result())
+    registry = MagicMock(create=MagicMock(return_value=_mock_connector([_doc("ws1")])))
+
+    with (
+        patch("metronix.connectors.connection_sync.get_registry", return_value=registry),
+        patch("metronix.ingestion.pipeline.ingest_documents", mock_ingest),
+        patch(
+            "metronix.ingestion.pipeline.process_all_unsynced_graphs",
+            AsyncMock(return_value={"ok": 0, "errors": 0}),
+        ),
+    ):
+        await run_connection_sync(
+            sync_id="s4",
+            connection_id="c4",
+            connector_type="jira",
+            config={"url": "http://x"},
+            workspace_id="ws1",
+            store=store,
+            event_bus=None,
+        )
+
+    mock_ingest.assert_awaited_once()
+    assert mock_ingest.await_args.kwargs.get("skip_graph") is True
+    store.mark_documents_graph_unsynced_by_source.assert_awaited_once()
+    kw = store.mark_documents_graph_unsynced_by_source.await_args.kwargs
+    assert kw.get("workspace_id") == "ws1"
+    assert kw.get("connector_type") == "jira"
+    assert kw.get("source_ids") == ["J-1"]
 
 
 async def test_run_connection_sync_failed_does_not_advance_cursor(store, seeded_ids):
