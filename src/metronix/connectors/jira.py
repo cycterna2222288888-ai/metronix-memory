@@ -139,7 +139,8 @@ class JiraConnector(ConnectorInterface):
 
     # NOTE: sub-minute cursor filtering for the JQL minute-precision trap
     # lives in ``metronix.connectors._filter.is_strictly_after`` and is
-    # applied directly in ``fetch()`` above — no per-connector parser.
+    # applied inline in the ``_fetch_issues`` pagination loop above (which
+    # ``fetch()`` runs in a worker thread) — no per-connector parser.
 
     def _issue_to_document(self, raw_issue: dict, workspace_id: str) -> Document:
         structured = process_jira_issue(raw_issue)
