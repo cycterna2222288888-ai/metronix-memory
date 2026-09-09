@@ -167,7 +167,7 @@ class TestConfluenceFetchPostFilter:
                 "size": 1,
             }
         )
-        connector._client.get_page_by_id = MagicMock(
+        connector._client.get_content = MagicMock(
             return_value=_page("100", "2026-05-12T22:09:27.000Z")
         )
 
@@ -202,7 +202,7 @@ class TestConfluenceFetchPostFilter:
                 "size": 1,
             }
         )
-        connector._client.get_page_by_id = MagicMock(
+        connector._client.get_content = MagicMock(
             return_value=_page("100", "2026-05-12T22:09:28.000Z")
         )
 
@@ -213,6 +213,51 @@ class TestConfluenceFetchPostFilter:
             since=since,
         )
         assert len(docs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Cloud incremental sync — get_content portable path (#468)
+# ---------------------------------------------------------------------------
+
+
+class TestConfluenceFetchIncrementalCloud:
+    def test_cloud_client_without_get_page_by_id_uses_get_content(self) -> None:
+        """Cloud has cql + get_content but no get_page_by_id (atlassian-python-api 5.x)."""
+        from datetime import UTC, datetime
+
+        connector = ConfluenceConnector()
+        connector._config = {
+            "url": "https://co.atlassian.net",
+            "space_key": "X",
+            "username": "u",
+            "api_token": "t",
+        }
+        since = datetime(2026, 1, 1, tzinfo=UTC)
+
+        # Mirror Cloud: cql present, get_page_by_id absent; get_content is the portable API.
+        client = MagicMock(spec=["cql", "get_content"])
+        client.cql.return_value = {
+            "results": [{"content": {"id": "100"}}],
+            "totalSize": 1,
+            "size": 1,
+        }
+        client.get_content.return_value = _page("100", "2026-05-12T22:09:28.000Z")
+        connector._client = client
+
+        docs = connector._fetch_incremental(
+            workspace_id="ws1",
+            base_url="https://co.atlassian.net",
+            space_key="X",
+            since=since,
+        )
+
+        assert len(docs) == 1
+        assert docs[0].source_id == "100"
+        client.get_content.assert_called_once_with(
+            "100",
+            expand="body.storage,version,history",
+        )
+        assert not hasattr(client, "get_page_by_id")
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +382,71 @@ class TestConfluenceFetchFull:
 
         with pytest.raises(RuntimeError, match="429"):
             self._run(connector)
+
+
+# ---------------------------------------------------------------------------
+# The atlassian client is blocking `requests`; every call must run off the
+# event loop so a slow/hung Confluence can't freeze the API (#459).
+# ---------------------------------------------------------------------------
+
+
+def _thread_recorder(seen: list[object], return_value: object):
+    import threading
+
+    def _record(*_a: object, **_k: object) -> object:
+        seen.append(threading.current_thread())
+        return return_value
+
+    return _record
+
+
+class TestConfluenceRunsOffTheEventLoop:
+    @staticmethod
+    def _connector() -> ConfluenceConnector:
+        c = ConfluenceConnector()
+        c._config = {
+            "url": "https://co.atlassian.net",
+            "space_key": "ENG",
+            "username": "u",
+            "api_token": "t",
+        }
+        c._client = MagicMock()
+        return c
+
+    @pytest.mark.asyncio
+    async def test_full_fetch_offloads_get_all_pages_from_space(self) -> None:
+        import threading
+
+        connector = self._connector()
+        seen: list[object] = []
+        connector._client.get_all_pages_from_space.side_effect = _thread_recorder(seen, iter(()))
+
+        await connector.fetch("ws1", since=None)
+
+        assert seen and seen[0] is not threading.main_thread()
+
+    @pytest.mark.asyncio
+    async def test_incremental_fetch_offloads_cql(self) -> None:
+        import threading
+        from datetime import UTC, datetime
+
+        connector = self._connector()
+        seen: list[object] = []
+        connector._client.cql.side_effect = _thread_recorder(
+            seen, {"results": [], "totalSize": 0, "size": 0}
+        )
+
+        await connector.fetch("ws1", since=datetime(2026, 1, 1, tzinfo=UTC))
+
+        assert seen and seen[0] is not threading.main_thread()
+
+    @pytest.mark.asyncio
+    async def test_health_check_offloads_get_all_spaces(self) -> None:
+        import threading
+
+        connector = self._connector()
+        seen: list[object] = []
+        connector._client.get_all_spaces.side_effect = _thread_recorder(seen, [])
+
+        assert await connector.health_check() is True
+        assert seen and seen[0] is not threading.main_thread()

@@ -1,12 +1,14 @@
 """Confluence connector — fetches pages via REST API.
 
 Uses atlassian-python-api for CQL queries and page body retrieval.
-Supports incremental sync via lastModified CQL filter.
+Supports incremental sync via lastModified CQL filter. The atlassian client is
+synchronous (requests-based, no async variant), so every blocking call runs in
+``asyncio.to_thread`` — see ``fetch`` / ``health_check`` (#459).
 """
 
-# TODO: async migration
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
 from collections.abc import Iterator
@@ -82,9 +84,13 @@ class ConfluenceConnector(ConnectorInterface):
         space_key = self._config.get("space_key", "")
         base_url = self._config["url"].rstrip("/")
 
+        # The atlassian client is blocking `requests`; keep it off the event
+        # loop so a slow/hung Confluence does not freeze the whole API (#459).
         if since:
-            return self._fetch_incremental(workspace_id, base_url, space_key, since)
-        return self._fetch_full(workspace_id, base_url, space_key)
+            return await asyncio.to_thread(
+                self._fetch_incremental, workspace_id, base_url, space_key, since
+            )
+        return await asyncio.to_thread(self._fetch_full, workspace_id, base_url, space_key)
 
     def _fetch_full(
         self,
@@ -142,6 +148,10 @@ class ConfluenceConnector(ConnectorInterface):
         on every sync until the cursor's minute advances past it. We apply a
         precise sub-minute post-filter on ``page.version.when`` to drop those
         boundary docs (MTRNIX-332).
+
+        Page bodies are loaded via ``get_content`` (portable across Server and
+        Cloud in atlassian-python-api 5.x). ``get_page_by_id`` exists only on
+        Server and crashes Cloud incremental sync — issue #468.
         """
         documents: list[Document] = []
         cql = f'space="{space_key}" AND type=page' if space_key else "type=page"
@@ -168,7 +178,9 @@ class ConfluenceConnector(ConnectorInterface):
                 if not page_id:
                     continue
                 try:
-                    page = self._client.get_page_by_id(
+                    # Portable across Server + Cloud (atlassian-python-api 5.x).
+                    # Cloud has no get_page_by_id — see #468.
+                    page = self._client.get_content(
                         page_id,
                         expand="body.storage,version,history",
                     )
@@ -247,7 +259,7 @@ class ConfluenceConnector(ConnectorInterface):
         if self._client is None:
             return False
         try:
-            self._client.get_all_spaces(limit=1)
+            await asyncio.to_thread(self._client.get_all_spaces, limit=1)
             return True
         except Exception:
             return False
