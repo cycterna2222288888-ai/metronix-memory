@@ -1,7 +1,7 @@
 # Multi-hop retrieval in Metronix: evidence from MuSiQue
 
-Status: **draft, 2026-09-24.** Oracle-graph results are final for this slice; results on
-the LLM-extracted graph and the end-to-end pipeline are pending (marked *pending*).
+Status: **2026-09-24.** Oracle-graph channel results on 150 questions; oracle vs
+LLM-extracted graph and end-to-end results on a 30-question subset.
 
 ## Summary
 
@@ -24,14 +24,25 @@ were filtered against single-hop shortcuts, the picture is different:
    **144 of 150** (dense ∪ BFS: 123; dense alone: 97).
 5. PPR spends most of its 5 slots re-returning dense's own anchor documents. Excluding
    the anchors (new opt-in flag) raises dense top-30 ∪ PPR to **149 of 150**
-   (prototype measurement; formal flag run *pending*).
+   (prototype measurement).
 6. A HippoRAG-2-style teleport (mass on dense anchor documents instead of all entities)
    **did not help** here: 75 of 150 vs 133 for the current uniform teleport.
 
-All of the above uses an **oracle graph** built from MuSiQue's gold decompositions and
-is therefore an upper bound on what the graph channels can contribute. The same
-measurements on a graph extracted by Metronix's own pipeline (`qwen2.5:3b`) are
-*pending*; that comparison decides how much of the gain is real.
+Items 1-6 use an **oracle graph** built from MuSiQue's gold decompositions, an upper
+bound on what the graph channels can contribute. Two results on a 30-question subset
+qualify them:
+
+7. **With a graph extracted by Metronix's own pipeline (`qwen2.5:3b`) most of the gain
+   disappears.** On the same 535-document corpus PPR returns the last-hop paragraph for
+   29 of 30 questions on the oracle graph and **9 of 30** on the LLM graph; dense top-30
+   ∪ PPR goes from 30/30 to 25/30 (dense alone: 24/30). The bottleneck on real graphs
+   is extraction quality, not the traversal.
+8. **Even on the oracle graph, graph-found candidates rarely reach the answer model.**
+   PPR adds the missing last-hop paragraph to the candidate pool for 6 of 30 questions,
+   but the fragments handed to the LLM contain both gold paragraphs for 25 of 30 with
+   PPR versus 24 of 30 without any graph channel: 5 of the 6 are dropped between the
+   pool and the context (merge, signal scoring, rerank, top-k). This is where #497's
+   score-fusion question applies; the mechanism has not been traced here.
 
 ## Setup
 
@@ -45,7 +56,7 @@ deduplicated by content hash: 2999 occurrences → 2328 documents (250 supportin
 | Graph | How it is built | Used for |
 | --- | --- | --- |
 | Oracle | Paragraph titles as entities (MENTIONS); each decomposition step `subject -[relation]-> answer`, both mentioned by the step's supporting paragraph; `answer_aliases` as ALIAS | Upper bound; isolates retrieval logic from extraction quality |
-| LLM | Production `write_doc_graph` with `qwen2.5:3b` over "title + paragraph" | Realistic graph; first 30 questions (535 documents) — *pending* |
+| LLM | Production `write_doc_graph` with `qwen2.5:3b` over "title + paragraph" | Realistic graph; first 30 questions (535 documents) |
 
 **Stack.** Neo4j 5.26 Community, Qdrant 1.18.0 (versions from `docker-compose.yml`),
 Ollama 0.34.4 with `nomic-embed-text` (768-d) for dense vectors, local SPLADE
@@ -60,7 +71,7 @@ the top-5 dense documents, top 5). Seeds: `extract_title_entities(question)`
 **Metrics.** Whether the hop-0 and last-hop gold paragraphs are among a channel's
 returned documents, and among dense top-30 ∪ graph channel (the candidate pool fusion
 can draw on). End-to-end: whether they reach the fragments handed to the answer model
-after merge, signal scoring and cross-encoder rerank (*pending*).
+after merge, signal scoring and cross-encoder rerank.
 
 ## Results (oracle graph, 150 questions)
 
@@ -112,16 +123,55 @@ The 15 remaining PPR misses are ranking losses around hub entities shared by man
 questions (e.g. *Nelson River*, *Vila Franca de Xira*), where the walk's mass spreads
 over many documents.
 
-### End-to-end: does the evidence reach the answer model? — *pending*
+## Results: oracle vs LLM-extracted graph (30 questions, same corpus)
 
-`pipeline_probe.py`, 30 questions, graph modes off / bfs / ppr / ppr-novel, oracle
-and LLM graphs.
+First 30 questions of the slice; their 535 distinct paragraphs are loaded twice, once
+with the oracle graph (workspace `musique-o30`) and once with the production
+`write_doc_graph` extractor on `qwen2.5:3b` (`musique-llm`). Same documents, same
+dense retrieval (dense top-30 finds the last hop for 24/30 in both), so the graph is the
+only variable. The smaller corpus makes dense stronger than in the 150-question runs.
 
-### LLM-extracted graph — *pending*
+The extractor produced 5.7 entities and 3.3 relationships per paragraph on average;
+11 of 535 paragraphs yielded none (repetition loops truncated by the output cap). It
+misses bridge entities: the *Philae (spacecraft)* paragraph yields *Cologne* but not
+*German Aerospace Center*, which is exactly the link the Ulrich Walter question needs.
 
-Same channels on the `qwen2.5:3b` graph for the first 30 questions. Early observation:
-the extractor misses bridge entities (the *Philae* paragraph yields *Cologne* but not
-*German Aerospace Center*), which breaks exactly the links multi-hop depends on.
+### Graph channels (production seeds)
+
+| | oracle graph | LLM graph |
+| --- | --- | --- |
+| BFS: last hop in channel top-5 | 16 | 10 |
+| BFS: empty result | 14 | 15 |
+| PPR: last hop in channel top-5 | **29** | **9** |
+| dense@30 ∪ BFS: last hop | 28 | 27 |
+| dense@30 ∪ PPR: last hop | 30 | 25 |
+| dense@30 ∪ PPR, anchors excluded: last hop | 30 | 27 |
+
+### End-to-end: does the evidence reach the answer model?
+
+`pipeline_probe.py` runs the production `hybrid_search_and_answer` (LLM calls stubbed,
+query expansion and classifier off, `k=25`). "Context" = fragments handed to the answer
+model; with 535 short paragraphs all 25 fit the token budget.
+
+| graph mode | oracle: both gold in context | LLM: both gold in context | both in post-rerank top-5 / top-10 (either graph) |
+| --- | --- | --- | --- |
+| off (no graph channel) | 24 | 24 | 10 / 15 |
+| bfs (default) | 24 | 24 | 10 / 15 |
+| ppr | 25 | 24 | 10 / 15 |
+| ppr, anchors excluded | 25 | 24 | 10 / 15 |
+
+On the oracle graph PPR brings the last-hop paragraph into the candidate pool for 6
+questions where dense misses it, yet the context gains one question. On the LLM graph
+no graph mode changes the context at all. The post-rerank top-5 and top-10 are
+identical across modes: the cross-encoder and fusion rank graph-only candidates below
+dense ones. Whether that is the reranker judging the bridge paragraph irrelevant to the
+question (it shares no terms with it, by construction) or the fusion scores is the
+open #497 question.
+
+On the 150-question oracle run (2328 documents) the same pipeline gives, for the first
+30 questions: both gold in context for 17 (off), 18 (bfs), 20 (ppr), 21 (ppr, anchors
+excluded) — a larger effect in the harder, larger corpus, still well below the
+candidate-pool gains.
 
 ## Defects found along the way
 
@@ -134,7 +184,8 @@ the extractor misses bridge entities (the *Philae* paragraph yields *Cologne* bu
 
 ## Limitations
 
-- **Oracle graph** for all headline numbers: an upper bound, not a production estimate.
+- **Oracle graph** for the 150-question numbers: an upper bound. The LLM-graph
+  comparison covers 30 questions and one extractor (`qwen2.5:3b` on CPU).
 - **150 questions, 2-hop only, one run.** No 3/4-hop, no variance estimate.
 - **Candidate-pool metrics**, not answer accuracy (EM/F1).
 - **No external baseline.** Numbers are not yet comparable to published MuSiQue results
@@ -159,10 +210,11 @@ python -m benchmarks.musique.scripts.convert --graph llm --workspace musique-llm
 
 ## Next steps
 
-1. Finish the LLM-graph and end-to-end measurements; update this report.
+1. Trace why graph-found candidates are dropped between the pool and the context
+   (#497): per-candidate signal score, rerank score and final rank.
 2. Scale to the full MuSiQue dev set (2/3/4-hop) and 2WikiMultiHopQA on a GPU; report
    passage Recall@2/@5 and answer EM/F1 next to published baselines.
-3. Compare extractors (3B, 7B, an API model) to measure how much of the graph gain
-   survives extraction quality.
+3. Compare extractors (3B, 7B, an API model): the oracle-to-LLM gap (PPR 29 → 9 of 30)
+   is the largest effect measured here.
 4. Decide #156 (PPR take/park) and #497 (score fusion) with this evidence; the
    unranked-truncation observation belongs to #497.
