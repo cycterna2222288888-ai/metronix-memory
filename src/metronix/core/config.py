@@ -241,6 +241,11 @@ class Settings(BaseSettings):
     # inference of a small model over a full document can take minutes, so the
     # default is generous; raise it on slow hardware, lower it for fast endpoints.
     graph_extraction_llm_timeout: int = Field(300, alias="GRAPH_EXTRACTION_LLM_TIMEOUT")
+    # Output cap for the extraction call. Without it a small local model that falls into
+    # a repetition loop in JSON mode generates until the timeout (and Ollama keeps
+    # generating after the client gives up), stalling the extraction worker; a normal
+    # entity/relationship JSON is a few hundred tokens.
+    graph_extraction_max_tokens: int = Field(2048, alias="GRAPH_EXTRACTION_MAX_TOKENS")
 
     # --- Embedding cache ---
     embedding_cache_ttl: int = Field(3600, alias="EMBEDDING_CACHE_TTL")
