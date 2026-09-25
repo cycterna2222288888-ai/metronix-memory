@@ -1,15 +1,19 @@
 """Confluence connector — fetches pages via REST API.
 
 Uses atlassian-python-api for CQL queries and page body retrieval.
-Supports incremental sync via lastModified CQL filter.
+Supports incremental sync via lastModified CQL filter. The atlassian client is
+synchronous (requests-based, no async variant), so every blocking call runs in
+``asyncio.to_thread`` — see ``fetch`` / ``health_check`` (#459).
 """
 
-# TODO: async migration
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import time
+from collections.abc import Iterator
 from datetime import datetime
+from typing import Any
 
 import structlog
 
@@ -19,6 +23,28 @@ from metronix.core.interfaces import ConnectorInterface
 from metronix.core.models import Connection, Document
 
 logger = structlog.get_logger()
+
+
+def _iter_pages(result: Any) -> Iterator[dict[str, Any]]:
+    """Normalise ``get_all_pages_from_space``'s return value to an iterator of pages.
+
+    ``atlassian-python-api`` changed this method's contract across majors:
+
+    * ``<= 3.41`` — a ``list``: one page slab of up to ``limit`` items; the
+      caller paginated with ``start`` / ``limit``.
+    * ``4.0.4 - 4.0.7`` — a ``list``: every page, auto-paginated internally.
+    * ``>= 5.0.0`` — a **generator** that walks ``_links.next`` across all pages
+      (upstream PR #1616). ``len()`` on it raises
+      ``TypeError: object of type 'generator' has no len()`` — issue #460.
+
+    A raw ``{"results": [...]}`` dict is also tolerated defensively. The result
+    is always iterated exactly once, so a generator is safe to pass through.
+    """
+    if result is None:
+        return iter(())
+    if isinstance(result, dict):
+        return iter(result.get("results", []))
+    return iter(result)
 
 
 class ConfluenceConnector(ConnectorInterface):
@@ -58,9 +84,13 @@ class ConfluenceConnector(ConnectorInterface):
         space_key = self._config.get("space_key", "")
         base_url = self._config["url"].rstrip("/")
 
+        # The atlassian client is blocking `requests`; keep it off the event
+        # loop so a slow/hung Confluence does not freeze the whole API (#459).
         if since:
-            return self._fetch_incremental(workspace_id, base_url, space_key, since)
-        return self._fetch_full(workspace_id, base_url, space_key)
+            return await asyncio.to_thread(
+                self._fetch_incremental, workspace_id, base_url, space_key, since
+            )
+        return await asyncio.to_thread(self._fetch_full, workspace_id, base_url, space_key)
 
     def _fetch_full(
         self,
@@ -68,49 +98,38 @@ class ConfluenceConnector(ConnectorInterface):
         base_url: str,
         space_key: str,
     ) -> list[Document]:
-        """Full sync using content API (returns body.storage)."""
+        """Full sync — walk every page in the space (``body.storage`` expanded).
+
+        ``get_all_pages_from_space`` is a lazily-paginated generator in
+        atlassian-python-api 5.x (it follows ``_links.next`` internally); it was
+        a plain list in <= 4.x. ``_iter_pages`` normalises both, so we iterate
+        once — no manual ``start`` / ``limit`` paging and no ``len()`` (see #460).
+
+        The pre-5.x inline per-batch 429 retry is gone: the 5.x paginator raises
+        from inside iteration and cannot be resumed after a sleep. A rate limit
+        (or any transport error) now fails the full sync — ``last_synced_at`` is
+        not advanced and the next scheduled run retries from scratch. Callers
+        that need transparent backoff can enable it at the client level
+        (``backoff_and_retry=True``); tracked separately.
+        """
         documents: list[Document] = []
-        start, limit = 0, 25
         expand = "body.storage,version,history"
+        space_arg = space_key or None
 
-        while True:
-            try:
-                if space_key:
-                    pages = self._client.get_all_pages_from_space(
-                        space_key,
-                        start=start,
-                        limit=limit,
-                        expand=expand,
-                    )
-                else:
-                    pages = self._client.get_all_pages_from_space(
-                        None,
-                        start=start,
-                        limit=limit,
-                        expand=expand,
-                    )
-            except Exception as e:
-                if "429" in str(e) or "Too Many" in str(e):
-                    logger.warning("confluence.rate_limit", start=start)
-                    time.sleep(4)
-                    continue
-                raise
+        pages = self._client.get_all_pages_from_space(space_arg, limit=25, expand=expand)
 
-            if not pages:
-                break
-
-            for page in pages:
+        try:
+            for page in _iter_pages(pages):
                 try:
                     doc = self._page_to_document(page, workspace_id, base_url, space_key)
                     documents.append(doc)
                 except Exception as e:
+                    # one bad page must not abort the whole sync
                     logger.warning("confluence.page.error", error=str(e))
-
-            if len(pages) < limit:
-                break
-            start += limit
-            if len(documents) % 50 < limit:
-                logger.info("confluence.fetch.progress", pages=len(documents))
+        except Exception as e:
+            if "429" in str(e) or "Too Many" in str(e):
+                logger.warning("confluence.rate_limit", fetched=len(documents))
+            raise
 
         logger.info("confluence.fetch.done", pages=len(documents))
         return documents
@@ -129,6 +148,10 @@ class ConfluenceConnector(ConnectorInterface):
         on every sync until the cursor's minute advances past it. We apply a
         precise sub-minute post-filter on ``page.version.when`` to drop those
         boundary docs (MTRNIX-332).
+
+        Page bodies are loaded via ``get_content`` (portable across Server and
+        Cloud in atlassian-python-api 5.x). ``get_page_by_id`` exists only on
+        Server and crashes Cloud incremental sync — issue #468.
         """
         documents: list[Document] = []
         cql = f'space="{space_key}" AND type=page' if space_key else "type=page"
@@ -155,7 +178,9 @@ class ConfluenceConnector(ConnectorInterface):
                 if not page_id:
                     continue
                 try:
-                    page = self._client.get_page_by_id(
+                    # Portable across Server + Cloud (atlassian-python-api 5.x).
+                    # Cloud has no get_page_by_id — see #468.
+                    page = self._client.get_content(
                         page_id,
                         expand="body.storage,version,history",
                     )
@@ -234,7 +259,7 @@ class ConfluenceConnector(ConnectorInterface):
         if self._client is None:
             return False
         try:
-            self._client.get_all_spaces(limit=1)
+            await asyncio.to_thread(self._client.get_all_spaces, limit=1)
             return True
         except Exception:
             return False

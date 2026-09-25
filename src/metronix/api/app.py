@@ -212,9 +212,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("owui_sync.not_configured", reason="AUTH_PASSWORD is not configured")
 
     # --- PostgresStore (shared) ---
-    from metronix.storage.postgres import PostgresStore
+    from metronix.storage.factory import build_document_store
 
-    store = PostgresStore(settings.postgres_dsn)
+    store = build_document_store(settings.postgres_dsn)
     app.state.postgres = store
 
     # Temporary conversation events already carry a per-row expiry. The worker
@@ -581,8 +581,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from metronix.proxy.service import ProxyService
         from metronix.proxy.tool_result import ToolResultEnricher
         from metronix.storage.conversation_postgres import ConversationPostgresStore
+        from metronix.storage.factory import build_memory_store
         from metronix.storage.llm_upstream_credentials import LlmUpstreamCredentialsStore
-        from metronix.storage.memory_postgres import MemoryPostgresStore
         from metronix.storage.memory_qdrant import MemoryQdrantStore
         from metronix.storage.memory_redis import RedisSessionCache
         from metronix.storage.redis import RedisStore
@@ -654,7 +654,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             pg_store = getattr(app.state, "memory_pg_store", None)
             if pg_store is None:
-                pg_store = MemoryPostgresStore(engine)
+                pg_store = build_memory_store(engine)
                 app.state.memory_pg_store = pg_store
 
             redis_cache = getattr(app.state, "redis_cache", None)

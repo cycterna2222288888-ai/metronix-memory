@@ -158,6 +158,7 @@ async def ingest_documents(
         SyncResult with ingestion statistics.
     """
     from metronix.core.config import Settings
+    from metronix.storage.factory import build_document_store
     from metronix.storage.postgres import PostgresStore
     from metronix.storage.qdrant import get_async_hybrid_store
 
@@ -171,7 +172,7 @@ async def ingest_documents(
     _pg_dsn = postgres_dsn or _settings.postgres_dsn
     pg_store: PostgresStore | None = None
     try:
-        pg_store = PostgresStore(_pg_dsn)
+        pg_store = build_document_store(_pg_dsn)
         existing_fps = await pg_store.batch_load_fingerprints(workspace_id)
         if existing_fps:
             dedup_index.load(existing_fps)
