@@ -54,6 +54,73 @@ async def _persist_cursor(
         logger.warning("sync.cursor_save_failed", connection_id=connection_id, error=str(e))
 
 
+async def release_unstarted_sync_claim(
+    store: PostgresStore,
+    connection_id: str,
+    *,
+    claim_id: str,
+    sync_id: str | None,
+    message: str,
+) -> None:
+    """Undo a claim that never produced a running ``run_connection_sync`` task.
+
+    Every sync entry point (autosync tick, REST ``trigger_sync``,
+    ``metronix_source_sync``) claims the connection — ``status='syncing'`` +
+    ``sync_claim_id=claim_id`` — and may pre-insert a ``running`` ``sync_logs``
+    row *before* the background task is actually scheduled. If something fails
+    in that window (connection vanished, decrypt/config error, any unexpected
+    exception) and the task is never spawned, both are orphaned:
+
+    * the connection lock blocks every later manual sync until the next API
+      restart runs ``recover_interrupted_syncs`` (#401);
+    * the ``sync_logs`` row stays ``running`` forever (#425 rounds 1-2).
+
+    Call this from a ``finally`` guarding that window, once it's known the task
+    was never spawned.
+
+    **Ownership-conditioned (#425).** The connection is moved to a terminal
+    ``error`` *only while ``sync_claim_id`` still equals ``claim_id``*
+    (``store.release_sync_claim``). If it does not — another request now owns
+    the lock, a completed run or ``recover_interrupted_syncs`` already cleared
+    it, or the row is a pre-token ``syncing`` orphan from an older deployment —
+    the connection is left completely untouched. This is what stops a request
+    that failed before spawn from clobbering the ``syncing`` status of a
+    *different* request's live sync (and thereby letting a third sync start).
+
+    The ``sync_logs`` row is finalized regardless — that ``sync_id`` is
+    unambiguously this attempt's own. Every failure here is logged and
+    swallowed — releasing a claim is best-effort cleanup and must never raise
+    into the caller's own error handling.
+    """
+    try:
+        released = await store.release_sync_claim(connection_id, claim_id, message)
+    except Exception:
+        logger.warning("sync.claim_release_failed", connection_id=connection_id, exc_info=True)
+        released = False
+    if not released:
+        logger.info(
+            "sync.claim_release_skipped",
+            connection_id=connection_id,
+            claim_id=claim_id,
+            reason=(
+                "sync_claim_id no longer matches — the lock is owned by another "
+                "sync, was already cleared, or is a pre-token orphan; left untouched"
+            ),
+        )
+
+    if sync_id is None:
+        return
+    try:
+        await store.update_sync_log(sync_id, status="failed", errors=[message])
+    except Exception:
+        logger.warning(
+            "sync.sync_log_finalize_failed",
+            connection_id=connection_id,
+            sync_id=sync_id,
+            exc_info=True,
+        )
+
+
 # Module-level registry instance
 _registry: ConnectorRegistry | None = None
 
@@ -215,6 +282,7 @@ async def run_connection_sync(
 
         # Phase 1: Persist raw documents to PostgreSQL (source of truth)
         upsert_result: dict[str, Any] | None = None
+        upsert_error: str | None = None
         try:
             upsert_result = await store.upsert_raw_documents(
                 workspace_id=workspace_id,
@@ -231,6 +299,7 @@ async def run_connection_sync(
                 unchanged=upsert_result["unchanged"],
             )
         except Exception as e:
+            upsert_error = sanitize_error(str(e))
             logger.warning("sync.raw_documents.error", error=str(e))
 
         # Phase 1b: Enqueue KB freshness jobs for changed docs (PROJ-313).
@@ -272,8 +341,18 @@ async def run_connection_sync(
                     payload={"connector_type": connector_type, "source_id": src_id},
                 )
 
-        # Phase 2: Ingest into Qdrant (only new/updated docs, skip unchanged)
-        if upsert_result and upsert_result.get("changed_source_ids"):
+        # Phase 2: Ingest into Qdrant. Every ingest is delete-before-add per
+        # doc_label (``incremental=True``): Qdrant point ids are random UUIDs,
+        # so re-ingesting a document without first dropping its old points
+        # duplicates every chunk (#461). ``delete_by_doc_labels`` is a cheap
+        # no-op for a genuinely new document that has no points yet.
+        if upsert_result is None:
+            # Phase 1 persist failed — we do not know what changed. Writing to
+            # Qdrant on top of an unknown PG state is worse than skipping.
+            docs_to_ingest = []
+            msg = "raw_documents persist failed; Qdrant ingest skipped"
+            errors_list.append(f"{msg}: {upsert_error}" if upsert_error else msg)
+        elif upsert_result.get("changed_source_ids"):
             changed_ids = set(upsert_result["changed_source_ids"])
             docs_to_ingest = [d for d in documents if d.source_id in changed_ids]
             logger.info(
@@ -283,7 +362,10 @@ async def run_connection_sync(
                 skipped=len(documents) - len(docs_to_ingest),
             )
         else:
-            docs_to_ingest = documents
+            # Nothing new or changed — Qdrant already holds these chunks;
+            # re-ingesting would duplicate them (#461).
+            docs_to_ingest = []
+            logger.info("sync.nothing_to_ingest", total=len(documents))
 
         if docs_to_ingest:
             result = await ingest_documents(
@@ -292,6 +374,7 @@ async def run_connection_sync(
                 connector_type,
                 source_role=connector.source_role,
                 skip_graph=True,
+                incremental=True,
             )
             documents_new = result.documents_new
             documents_updated = result.documents_updated
@@ -316,6 +399,30 @@ async def run_connection_sync(
                     )
             except Exception as e:
                 logger.warning("sync.mark_synced.error", error=str(e))
+
+            # Phase 3b: The ingest above ran with ``incremental=True``, which
+            # deletes each re-ingested doc's graph node (delete-before-add in
+            # ``ingest_documents``) but not its ``graph_synced`` flag — and it
+            # ran with ``skip_graph=True``, so nothing rebuilt the node inline.
+            # For new / content-changed docs ``upsert_raw_documents`` already
+            # set ``graph_synced=false``; a sidecar-only refresh (#440) leaves
+            # it ``true``, so Phase 4 below would never rebuild the node that
+            # was just deleted — permanent graph loss until the next content
+            # change (#461). Force the re-ingested source ids unsynced so the
+            # graph sweeper picks them up. Idempotent for the already-false
+            # rows.
+            try:
+                ingested_source_ids = [d.source_id for d in docs_to_ingest if d.source_id]
+                if ingested_source_ids:
+                    await store.mark_documents_graph_unsynced_by_source(
+                        workspace_id=workspace_id,
+                        connector_type=connector_type,
+                        source_ids=ingested_source_ids,
+                    )
+            except Exception as e:
+                logger.warning("sync.mark_graph_unsynced.error", error=str(e))
+        elif upsert_result is None:
+            status = "failed"
         else:
             status = "success"
 
@@ -390,6 +497,10 @@ async def run_connection_sync(
                 status=final_conn_status,
                 error_message=error_msg,
                 last_synced_at=(fetch_started_at if status in ("success", "partial") else None),
+                # This task is the authoritative owner of the claim and the
+                # claim is now over — drop the token (#425). Nothing can steal
+                # an in-flight claim (no reclaim path), so this is unconditional.
+                clear_sync_claim=True,
             )
         except Exception as e:
             logger.warning(

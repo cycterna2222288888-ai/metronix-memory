@@ -53,7 +53,11 @@ dependencies = [
 
 [project.optional-dependencies]
 connectors = [
-    "atlassian-python-api>=5.0.0,<6",
+    # 5.x split Confluence into Cloud/Server clients and made get_all_* return
+    # generators (upstream PR #1616); the connector depends on that contract plus
+    # the 5.0.3/5.0.4 Confluence REST fixes. <6 guards the next major, where
+    # pagination behaviour changed once before (4 -> 5). uv.lock pins the build.
+    "atlassian-python-api>=5.0.4,<6",
     "notion-client>=2.2,<3",
     "PyGithub>=2.5,<3",
     "google-api-python-client>=2.198.0,<3",

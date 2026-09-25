@@ -46,8 +46,8 @@ async def build_memory_service_for_workspace(workspace_id: str) -> MemoryService
         from metronix.mcp.server import get_activity_bus
         from metronix.memory.search import MemorySearchService
         from metronix.memory.service import MemoryService
+        from metronix.storage.factory import build_memory_store
         from metronix.storage.freshness_pg import FreshnessStore
-        from metronix.storage.memory_postgres import MemoryPostgresStore
         from metronix.storage.memory_qdrant import MemoryQdrantStore
         from metronix.storage.memory_redis import RedisSessionCache
         from metronix.storage.redis import RedisStore
@@ -61,7 +61,7 @@ async def build_memory_service_for_workspace(workspace_id: str) -> MemoryService
         )
 
         engine = create_async_engine(settings.postgres_dsn, pool_pre_ping=True)
-        pg_store = MemoryPostgresStore(engine)
+        pg_store = build_memory_store(engine)
         # MTRNIX-314: FreshnessStore wires the review-queue methods on
         # MemoryService. Shares the same AsyncEngine as MemoryPostgresStore.
         freshness_store = FreshnessStore(engine)
