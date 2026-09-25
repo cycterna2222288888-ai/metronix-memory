@@ -233,6 +233,7 @@ def get_memory_service(request: Request) -> MemoryService:
 
     from metronix.memory.search import MemorySearchService
     from metronix.memory.service import MemoryService
+    from metronix.storage.factory import build_memory_store
     from metronix.storage.memory_postgres import MemoryPostgresStore
     from metronix.storage.memory_qdrant import MemoryQdrantStore
     from metronix.storage.memory_redis import RedisSessionCache
@@ -273,7 +274,7 @@ def get_memory_service(request: Request) -> MemoryService:
         if engine is None:
             engine = create_async_engine(settings.postgres_dsn, pool_pre_ping=True)
             request.app.state.memory_pg_engine = engine
-        pg_store = MemoryPostgresStore(engine)
+        pg_store = build_memory_store(engine)
         request.app.state.memory_pg_store = pg_store
 
     qdrant_store = MemoryQdrantStore(
@@ -368,6 +369,7 @@ def get_memory_health_service(request: Request) -> MemoryHealthService:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from metronix.memory.health import MemoryHealthService
+    from metronix.storage.factory import build_memory_store
     from metronix.storage.memory_postgres import MemoryPostgresStore
 
     settings: Settings = request.app.state.settings
@@ -392,7 +394,7 @@ def get_memory_health_service(request: Request) -> MemoryHealthService:
         if engine is None:
             engine = create_async_engine(settings.postgres_dsn, pool_pre_ping=True)
             request.app.state.memory_pg_engine = engine
-        pg_store = MemoryPostgresStore(engine)
+        pg_store = build_memory_store(engine)
         request.app.state.memory_pg_store = pg_store
 
     health_service = MemoryHealthService(
@@ -419,6 +421,7 @@ def get_memory_snapshot_service(request: Request) -> MemorySnapshotService:
     from sqlalchemy.ext.asyncio import create_async_engine
 
     from metronix.memory.snapshot import MemorySnapshotService
+    from metronix.storage.factory import build_memory_store
     from metronix.storage.memory_postgres import MemoryPostgresStore
     from metronix.storage.memory_qdrant import MemoryQdrantStore
 
@@ -444,7 +447,7 @@ def get_memory_snapshot_service(request: Request) -> MemorySnapshotService:
         if engine is None:
             engine = create_async_engine(settings.postgres_dsn, pool_pre_ping=True)
             request.app.state.memory_pg_engine = engine
-        pg_store = MemoryPostgresStore(engine)
+        pg_store = build_memory_store(engine)
         request.app.state.memory_pg_store = pg_store
 
     qdrant_store = MemoryQdrantStore(
@@ -480,6 +483,7 @@ def get_raw_document_service(request: Request) -> RawDocumentReadService:
     as :func:`get_memory_health_service`).
     """
     from metronix.knowledge.service import RawDocumentReadService
+    from metronix.storage.factory import build_document_store
     from metronix.storage.postgres import PostgresStore
 
     settings: Settings = request.app.state.settings
@@ -499,7 +503,7 @@ def get_raw_document_service(request: Request) -> RawDocumentReadService:
     # not present (common in minimal test-app setups).
     pg_store: PostgresStore | None = getattr(request.app.state, "postgres", None)
     if pg_store is None:
-        pg_store = PostgresStore(settings.postgres_dsn)
+        pg_store = build_document_store(settings.postgres_dsn)
         request.app.state.postgres = pg_store
 
     service = RawDocumentReadService(pg_store, workspace_id=workspace_id)

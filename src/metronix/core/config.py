@@ -183,6 +183,18 @@ class Settings(BaseSettings):
     default_workspace_name: str = Field("MTRNIX", alias="DEFAULT_WORKSPACE_NAME")
     workspace_persistence: str = Field("neo4j", alias="WORKSPACE_PERSISTENCE")
 
+    # --- Storage backend (edition split — see docs/STORAGE.md) ---
+    storage_backend: str = Field(
+        "postgres",
+        alias="STORAGE_BACKEND",
+        description=(
+            "Relational storage backend. 'postgres' is the only implementation "
+            "today; the knob exists so a future lightweight (single-user) edition "
+            "can add one without re-touching call sites. Constructed via "
+            "metronix.storage.factory."
+        ),
+    )
+
     # --- Search tuning ---
     search_max_total_chars: int = Field(40000, alias="SEARCH_MAX_TOTAL_CHARS")
     search_max_fragment_chars: int = Field(8000, alias="SEARCH_MAX_FRAGMENT_CHARS")
@@ -396,7 +408,16 @@ class Settings(BaseSettings):
     freshness_weight: float = Field(
         default=0.0,
         alias="METRONIX_FRESHNESS_WEIGHT",
-        description="Scoring weight for the freshness signal. 0.0 = off.",
+        description=(
+            "Global scoring weight for the per-candidate freshness signal "
+            "(MTRNIX-417). 0.0 (default) = off: compute_signal_score's freshness "
+            "term drops out of both numerator and denominator, so signal_score is "
+            "numerically identical to a build without it. Raising it lets "
+            "STALE-tagged documents (freshness_score < 1.0 from the KB freshness "
+            "producer) rank below otherwise-equal fresh ones. Any non-zero value "
+            "also shifts absolute signal_score magnitudes for every candidate, so "
+            "re-check min_signal_score calibration when enabling it."
+        ),
     )
     freshness_kb_stale_after_days: int = Field(
         default=90,
@@ -612,6 +633,18 @@ class Settings(BaseSettings):
         allowed = {"development", "staging", "production"}
         if v not in allowed:
             msg = f"env must be one of {allowed}, got '{v}'"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("storage_backend")
+    @classmethod
+    def validate_storage_backend(cls, v: str) -> str:
+        allowed = {"postgres"}
+        if v not in allowed:
+            msg = (
+                f"storage_backend must be one of {sorted(allowed)}, got '{v}'. "
+                "Only PostgreSQL is implemented today — see docs/STORAGE.md."
+            )
             raise ValueError(msg)
         return v
 
