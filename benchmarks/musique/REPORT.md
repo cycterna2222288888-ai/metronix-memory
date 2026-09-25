@@ -101,7 +101,7 @@ with the question and is absent from the top 30.
 With oracle seeds BFS reaches the last hop in 146 of 150 — its weakness is seeding, not
 traversal. PPR sidesteps seeding by anchoring on dense results.
 
-### PPR variants (prototype script `ppr_proto.py`, branch `wip/ppr-multihop`)
+### PPR variants (prototype)
 
 | Teleport | channel top-5: last hop | dense@30 ∪ channel: last hop |
 | --- | --- | --- |
