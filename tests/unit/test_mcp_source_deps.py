@@ -11,7 +11,7 @@ class _FakeSettings:
 
 def test_resolve_defaults_workspace_to_server_default(monkeypatch):
     monkeypatch.setattr(_source_deps, "get_settings", lambda: _FakeSettings())
-    monkeypatch.setattr(_source_deps, "PostgresStore", lambda dsn: ("store", dsn))
+    monkeypatch.setattr(_source_deps, "build_document_store", lambda dsn: ("store", dsn))
     _source_deps._reset_cache_for_tests()
 
     ws_id, store, key = _source_deps.resolve(None)
@@ -22,7 +22,7 @@ def test_resolve_defaults_workspace_to_server_default(monkeypatch):
 
 def test_resolve_uses_given_workspace(monkeypatch):
     monkeypatch.setattr(_source_deps, "get_settings", lambda: _FakeSettings())
-    monkeypatch.setattr(_source_deps, "PostgresStore", lambda dsn: ("store", dsn))
+    monkeypatch.setattr(_source_deps, "build_document_store", lambda dsn: ("store", dsn))
     _source_deps._reset_cache_for_tests()
 
     ws_id, _store, _key = _source_deps.resolve("teamA")
@@ -34,7 +34,7 @@ def test_resolve_raises_without_fernet_key(monkeypatch):
         fernet_key = ""
 
     monkeypatch.setattr(_source_deps, "get_settings", lambda: _NoKey())
-    monkeypatch.setattr(_source_deps, "PostgresStore", lambda dsn: ("store", dsn))
+    monkeypatch.setattr(_source_deps, "build_document_store", lambda dsn: ("store", dsn))
     _source_deps._reset_cache_for_tests()
 
     with pytest.raises(ValueError, match="FERNET_KEY"):

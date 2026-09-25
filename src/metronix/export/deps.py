@@ -8,8 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from metronix.export.jobs import ExportJobStore
 from metronix.export.service import ExportService
 from metronix.export.tokens import ExportTokenStore
-from metronix.storage.memory_postgres import MemoryPostgresStore
-from metronix.storage.postgres import PostgresStore
+from metronix.storage.factory import build_document_store, build_memory_store
 from metronix.storage.redis import RedisStore
 
 if TYPE_CHECKING:
@@ -40,8 +39,8 @@ def build_export_service(settings: Settings) -> ExportService:
         return _SERVICE
 
     engine = create_async_engine(settings.postgres_dsn, pool_pre_ping=True)
-    pg_doc_store = PostgresStore(settings.postgres_dsn)
-    mem_store = MemoryPostgresStore(engine)
+    pg_doc_store = build_document_store(settings.postgres_dsn)
+    mem_store = build_memory_store(engine)
     redis_store = RedisStore(settings.redis_url)
 
     _SERVICE = ExportService(

@@ -74,9 +74,9 @@ async def run_all() -> None:
 
     # Create channel manager (shared store instance)
     from metronix.channels.manager import ChannelManager
-    from metronix.storage.postgres import PostgresStore
+    from metronix.storage.factory import build_document_store
 
-    store = PostgresStore(settings.postgres_dsn)
+    store = build_document_store(settings.postgres_dsn)
 
     # Platform user mapper — resolves channel identities to internal users
     mapper = None
