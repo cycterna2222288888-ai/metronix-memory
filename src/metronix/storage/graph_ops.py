@@ -760,19 +760,28 @@ def get_doc_labels_by_entities(
                 if dl and dl not in seen_labels:
                     seen_labels.add(dl)
 
-        # Fetch titles for all doc_labels
+        # Fetch titles for all doc_labels in one query. Label-scoped matches can use the
+        # doc_label index; an unlabelled MATCH (d) per label scanned every node once per
+        # document (minutes per call on a graph where hub entities reach thousands).
         acl_frag, acl_params = _acl_clause(user_groups, "d")
-        for dl in seen_labels:
+        nodes_by_label: dict[str, object] = {}
+        if seen_labels:
             d_res = s.run(
-                "MATCH (d) WHERE ('Document' IN labels(d) OR 'JiraIssue' IN labels(d)) "
-                "AND d.doc_label = $dl "
+                "MATCH (d:Document) WHERE d.doc_label IN $dls "
+                f"{acl_frag} "
+                "RETURN d "
+                "UNION ALL "
+                "MATCH (d:JiraIssue) WHERE d.doc_label IN $dls "
                 f"{acl_frag} "
                 "RETURN d",
-                {"dl": dl, **acl_params},
+                {"dls": sorted(seen_labels), **acl_params},
             )
-            rec = d_res.single()
-            if rec:
+            for rec in d_res:
                 dnode = rec[0]
+                nodes_by_label.setdefault(dnode.get("doc_label"), dnode)
+        for dl in seen_labels:
+            dnode = nodes_by_label.get(dl)
+            if dnode is not None:
                 title = (
                     dnode.get("file_name")
                     or dnode.get("issue_key")
