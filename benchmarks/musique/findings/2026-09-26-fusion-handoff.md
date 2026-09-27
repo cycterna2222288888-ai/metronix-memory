@@ -46,7 +46,8 @@ three modes, which isolates the post-rerank fusion. The mode defaults
 ### Data and results committed
 
 - `results/2026-09-26/`: real pipeline runs on `musique-dev` (150 q, oracle graph), all with
-  `--trace`; `dev_off_signal.json` has per-stage ranks but no candidate dump, so it cannot be
+  `--trace`, stored gzipped (`gunzip -k` before `fusion_replay.py`); `dev_off_signal.json`
+  has per-stage ranks but no candidate dump, so it cannot be
   replayed. `ce_cache.jsonl` holds
   4,669 cross-encoder scores; keys are `sha1(query \0 passage[:512])`, so it can be reused
   with `--rerank-cache`.
