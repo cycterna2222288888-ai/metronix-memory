@@ -404,7 +404,7 @@ Pre-registered comparisons (paired per question; bootstrap 95% CI; exact sign te
 
 Reading, with the caveats that belong to it:
 
-- **H1 holds**: replacing the production blend (\`0.6 * signal + 0.4 * minmax(ce)\`) by the
+- **H1 holds**: replacing the production blend (`0.6 * signal + 0.4 * minmax(ce)`) by the
   calibrated convex combination gains 1.75 R@5 on held-out questions; the effect shrank
   from +2.5 on the tune half, as expected after selection. About two thirds of it is
   simply "stop burying the cross-encoder's tail": the cross-encoder-only control is
