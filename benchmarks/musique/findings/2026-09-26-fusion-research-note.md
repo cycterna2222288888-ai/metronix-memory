@@ -1,47 +1,51 @@
 # Graph + dense fusion for multi-hop retrieval (#497): research note
 
-Date: 2026-09-26. Continues `2026-09-26-fusion-handoff.md` (same day, earlier session).
-Status: **the end-to-end fusion comparison on a non-oracle graph has not been run.**
-The container this note was written in could not download the embedding, reranker and
-extraction models (its network policy denies `huggingface.co` and `registry.ollama.ai`),
-so every number below comes either from the earlier session's runs on the oracle graph
-or from measurements that need no model: graph topology, and the PPR graph channel with
-known anchors. What was found there changes what the fusion comparison should test, and
-the protocol for it is fixed in §4 before any of it is run.
+Date: 2026-09-26/27. Continues `2026-09-26-fusion-handoff.md` (earlier session).
+Status: end-to-end evaluation done on the HippoRAG MuSiQue set (1,000 questions, the
+Llama-3.3-70B OpenIE graph HippoRAG 2 released; tune half / held-out confirm half) and on
+the HippoRAG 2Wiki set (1,000 questions, all held out, a title-mention graph), with the
+production pipeline. The protocol and its two amendments were committed before the runs
+they govern (git history of this file). The oracle-graph dev slice and the qwen2.5:3b
+graph slice are in §5.10.
 
 ## Summary
 
-1. **The oracle graph cannot select a fusion method** (earlier session, repeated here
-   for completeness): in the MuSiQue decomposition graph 92% of distractors are isolated
-   and no supporting paragraph is, so "the graph returned it" nearly means "it is gold".
-   A cross-validated logistic regression reaches R@5 92.7 on it. Every oracle-graph
-   fusion gain (e.g. `ppr`+`rrf` R@5 66.7 → 84.7) is an upper bound of unknown slack.
-2. **The HippoRAG 2 MuSiQue graph does not leak.** On the Llama-3.3-70B OpenIE triples
-   that HippoRAG 2 released (11,656 passages, 86,919 entities), supporting and distractor
-   passages have the same entity counts (12.5 vs 11.9) and neighbourhoods (301 vs 341
-   neighbouring passages; 0.3% vs 1.7% isolated). It is a fair test bed, and its
-   published numbers give an external reference.
-3. **On that graph the production PPR channel almost never reaches the next hop, before
-   any fusion happens.** With the gold hop-0 passage and four of the question's
-   distractors as anchors (standing in for the dense top 5), the hop-1 passage is in the
-   channel's top 5 for **14 of 1,000** questions. The oracle graph gives 150 of 150 on the
-   same probe, which is why earlier work never saw this. Two design choices cause it:
-   the subgraph is cut at an edge limit in traversal order, so around hub entities
-   (one entity is mentioned by 1,294 passages) the next hop is not even loaded (67 of
-   1,000), and the teleport is uniform over every entity in the subgraph rather than on
-   the seeds.
-4. **Two opt-in channel settings fix most of it** (defaults unchanged): teleport on the
-   seed entities (`METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT=seeds`, as HippoRAG does) and
-   a subgraph grown from the least-mentioned seeds first
-   (`METRONIX_RETRIEVAL_GRAPH_PPR_SUBGRAPH=specific`). Together: next hop in the top 5
-   for **192 of 1,000** (13.7x), at lower latency (90 ms vs 147 ms median). With the gold
-   anchor alone: 112 → 399 of 1,000, where PPR over the entire graph gives 407.
-5. **The fusion modes** (`rrf`, `calibrated`, `bridge`, from the handoff) are implemented
-   and unit-tested but **not yet evaluated on any non-oracle graph**. Without item 4 they
-   would be fusing a channel that returns the bridge passage for about 1% of questions,
-   so they must be compared on top of both channel settings.
-
-No claim of a fusion improvement is made here.
+1. **The graph channel, not the fusion formula, was the first bottleneck on real
+   graphs.** On the OpenIE graph the production PPR channel puts the next-hop passage in
+   its top 5 for 14 of 1,000 questions even when given the right anchor (the oracle
+   graph: 150 of 150, which is why it went unnoticed). A bounded subgraph grown from the
+   most specific seed entities and a teleport weighted towards the best dense anchors
+   (opt-in, "ppr+") raise that to 192, at lower latency, and raise the share of gold
+   passages in the reranker's pool from 75.2% to 80.9% (MuSiQue) and from 79.8% to 97.4%
+   (2Wiki). The production channels add almost nothing to the pool (graph-only gold
+   passages: PPR 0 and BFS 1 on 500 MuSiQue questions, BFS 3 on 1,000 2Wiki questions).
+2. **The production fusion then buries what the graph finds.** With "ppr+" under the
+   production `signal` blend R@5 moves by +0.6 (MuSiQue) and +1.6 (2Wiki).
+3. **Fixing the blend alone helps a little, and replicates.** The pre-registered winner
+   of the tune half, `calibrated` fusion without graph, beats production on the held-out
+   MuSiQue half by +1.75 R@5 (CI 0.3 to 3.2, p = 0.018) and on 2Wiki by +0.7 (p = 0.076);
+   most of that is the cross-encoder no longer being min-max-squashed.
+4. **A learned fusion extracts the graph's signal, and transfers.** A logistic regression
+   over 20 per-candidate features (cross-encoder, channel scores and ranks, query-level
+   confidence), fitted on the 500 MuSiQue tune questions, run by the production pipeline:
+   - MuSiQue held-out half: R@5 58.3 → **62.8** (+4.5, CI 2.8 to 6.2, 86 wins / 31
+     losses), both gold passages in the answer context 44.4% → 57.8%; +2.2 R@5 over the
+     same learned fusion without the graph (p = 0.007).
+   - 2Wiki, a different dataset and graph, never used for fitting: R@5 71.9 → **85.7**
+     (+13.8, 338 / 9), R@2 +6.0, both gold passages in context 55.2% → 89.7%; +13.0 R@5
+     over the learned fusion without the graph.
+5. **Against published systems** this is not a new state of the art: HippoRAG 2 reaches
+   74.7 / 90.4 R@5 with a 7B embedder, and our 137M first stage caps MuSiQue. The gain of
+   graph fusion over the same system without it (+2.2 / +13.0; +4.5 / +13.8 over
+   production) is of the same order as HippoRAG 2's over NV-Embed-v2 (+5.0 / +13.9).
+6. **Negative results**: `rrf` with equal votes hurts R@2 badly once the graph channel is
+   noisy (-9.8 on MuSiQue tune); chain-conditioned `bridge` scoring was worse than plain
+   `calibrated` on the questions it finished (stopped for futility); query-conditioned
+   hand features add little over static ones; on the oracle graph every fusion looks
+   excellent because the topology leaks the answer.
+7. Four scaling defects surfaced on the way (§5.9), one of them fixed here without
+   changing results: `get_doc_labels_by_entities` ran one full node scan per document
+   (up to 31 s per call; the default BFS channel took ~20 s per question).
 
 ## 1. Question
 
@@ -525,48 +529,76 @@ None of these numbers is a new state of the art.
 | One unlabelled `MATCH (d)` node scan per document label | `get_doc_labels_by_entities`, called by the BFS channel and by post-rerank graph enrichment | up to 31 s per call; the default BFS channel took ~20 s per question | fixed: one labelled query, identical output, 25-240x faster |
 | Graph extraction timeout (300 s) shorter than a capped generation (2,048 tokens at ~6 tokens/s on CPU) | `GRAPH_EXTRACTION_LLM_TIMEOUT` vs `GRAPH_EXTRACTION_MAX_TOKENS` | a looping paragraph is abandoned at 300 s and retried behind its own still-running generation: 20-60 min per paragraph | harness sets the timeout to 900 s; worth aligning the defaults |
 
-## 6. Negative and null results so far
+## 6. Negative and null results
 
-- On the oracle graph, query-conditioned weights (MoR-style features in
-  `fusion_learned.py`) added nothing over static ones (handoff §2.2).
-- Chain-conditioned cross-encoder scoring helps on average but is noisy: in a 20-question
-  pilot with the gold anchor, the gold last hop was ranked first 11 times (7 without
-  conditioning) and worse in 4 questions (handoff §2.3).
-- A larger `paths` budget does not rescue the production channel: 2,000 nodes load the
-  next hop for 645 of 1,000 questions (500 nodes: 415) but its top-5 count stays at 110
-  with the uniform teleport (gold anchor).
-- On the oracle graph, the channel settings of §3.2 change nothing (150 of 150 either
-  way), so earlier oracle results are not affected by them.
+- **Equal-vote `rrf` with a noisy graph channel**: R@2 falls from 45.2 to 35.4 on the
+  MuSiQue tune half with "ppr+" (from 45.6 to 39.5 with production PPR), because a graph
+  candidate at rank 1 gets the same vote as the cross-encoder's rank 1.
+- **`bridge`** (chain-conditioned cross-encoder, the zero-shot analogue of BridgeRAG) was
+  worse than plain `calibrated` on the 177 questions it finished (R@5 55.2 vs 57.0) and
+  costs ~40 s per question on CPU; stopped for futility (§5.5).
+- **`calibrated` with "ppr+" on MuSiQue**: the two halves disagree on the sign of the R@5
+  difference to no-graph `calibrated` (-0.5, +1.9); only the answer-context gain
+  (+9 to +11 points) is stable. Fixed weights do not decide when to trust the graph.
+- **Query-conditioned features** (MoR-style confidence signals) add +0.6 R@5 over static
+  features in cross-validation; the shipped model uses them, but they are not the source
+  of the gain.
+- **Production channels**: BFS and PPR as shipped change no metric on either dataset
+  (§5.5, §5.7); a larger `paths` budget loads more passages but does not rank them
+  (next hop in the top 5: 110 vs 112).
+- **No LLM-free lexical proxy result transfers to MuSiQue**: rank fusion of BM25 and the
+  graph without a reranker is flat there (§5.4), although it gains +12.5 R@5 on 2Wiki.
 
 ## 7. Limitations
 
-- No end-to-end number on a non-oracle graph yet; everything in §5.3 is channel-only,
-  with gold anchors and distractors as stand-ins for dense anchors.
-- The `specific` budget was chosen on all 1,000 questions of the channel probe (§3.2).
-- The title-mention graph for 2Wiki is a crude, non-LLM graph with a structural bias
-  toward gold (§5.2).
-- MuSiQue's 150-question dev slice and qwen2.5:3b graph (30 questions) from the task
-  plan are not re-run here: loading and extraction need the same models.
-- CPU-only; latencies are for 4 cores with nothing else running.
+- **Two benchmarks, one domain.** Both are Wikipedia multi-hop QA. The learned model was
+  fitted on 500 MuSiQue questions and transfers to 2Wiki, but a Metronix workspace
+  (tickets, docs, chats) is a different distribution; the model is shipped as an opt-in
+  starting point, not a default.
+- **2Wiki's graph is structurally favourable** (§5.2, §5.7), so its +13.8 is an
+  optimistic figure; the MuSiQue OpenIE graph (balanced) gives the conservative one.
+- **The OpenIE graph was extracted by Llama-3.3-70B** (released by HippoRAG); Metronix's
+  own extractor (qwen2.5:3b on CPU) produces a much sparser graph (§5.10, and the
+  REPORT: PPR last hop 9/30 vs 29/30 on the oracle graph).
+- **Passage recall, not answer accuracy.** No reader/EM/F1 was run.
+- **Deviations from the protocol**: two production-channel `bridge` runs skipped and the
+  "ppr+" `bridge` run stopped after 177 questions (both recorded in this note before any
+  confirm-half result was read); H2/H3 were added after the tune half and before the
+  confirm half.
+- **Harness stubs**: LLM calls (resolver, answer, team-workflow router) are stubbed and
+  post-rerank graph enrichment is skipped on the HippoRAG sets; neither affects the
+  ranking (checked identical on samples).
+- CPU-only (4 cores). Latencies were measured on a shared machine; the "ppr+" channel is
+  faster than the production PPR channel (§5.3), `learned` adds no model call.
 
 ## 8. Reproduce
 
 ```bash
 git clone --depth 1 https://github.com/OSU-NLP-Group/HippoRAG <dir>
-# graph only (no models needed):
+# 1. Load (needs nomic-embed-text in Ollama and the SPLADE model; ~2 h on 4 CPU cores):
 python -m benchmarks.musique.scripts.hipporag_set --hipporag-dir <dir> \
   --workspace musique-hipporag --label-prefix mhr --graph openie \
-  --manifest <out>/manifest_hipporag.jsonl --skip-qdrant --reset
-python -m benchmarks.musique.scripts.ppr_ceiling --workspace musique-hipporag \
-  --manifest <out>/manifest_hipporag.jsonl --extra-anchors 4 --subgraph specific --teleport seeds
+  --manifest <out>/manifest_hipporag.jsonl --reset
 python -m benchmarks.musique.scripts.hipporag_set --hipporag-dir <dir> \
   --dataset 2wikimultihopqa --workspace wiki2-hipporag --label-prefix w2h --graph titles \
-  --manifest <out>/manifest_2wiki.jsonl --skip-qdrant --reset
-# full load (needs nomic-embed-text in Ollama and the SPLADE model): drop --skip-qdrant.
-# end-to-end matrix (needs bge-reranker-v2-m3), e.g. the "ppr+" configuration:
-RUNS_DIR=<runs> benchmarks/musique/scripts/run_matrix.sh musique-hipporag \
-  <out>/manifest_hipporag.jsonl 1000 mhr "off:signal ppr:signal ppr:rrf ppr:calibrated ppr:bridge" \
-  --env METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT=seeds \
-  --env METRONIX_RETRIEVAL_GRAPH_PPR_SUBGRAPH=specific \
-  --env METRONIX_RETRIEVAL_GRAPH_PPR_EXCLUDE_DENSE_ANCHORS=true
+  --manifest <out>/manifest_2wiki.jsonl --reset
+#    (graph only, no models: add --skip-qdrant; then ppr_ceiling.py / lexical_proxy.py)
+# 2. Split MuSiQue by index parity into <out>/manifest_hipporag_{tune,confirm}.jsonl.
+# 3. One configuration = one pipeline_probe run (bge-reranker-v2-m3 on first use), e.g.
+#    production and the learned "ppr+" configuration on the confirm half:
+python -m benchmarks.musique.scripts.pipeline_probe --workspace musique-hipporag \
+  --manifest <out>/manifest_hipporag_confirm.jsonl --limit 500 --graph bfs --fusion signal \
+  --trace --skip-graph-enrichment --rerank-cache <out>/ce.jsonl --output <runs>/prod.json
+python -m benchmarks.musique.scripts.pipeline_probe --workspace musique-hipporag \
+  --manifest <out>/manifest_hipporag_confirm.jsonl --limit 500 --graph ppr-novel \
+  --fusion learned --env METRONIX_RETRIEVAL_GRAPH_PPR_SUBGRAPH=specific \
+  --env METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT=ranked \
+  --trace --skip-graph-enrichment --rerank-cache <out>/ce.jsonl --output <runs>/learned.json
+python -m benchmarks.musique.scripts.compare_runs <runs>/prod.json <runs>/learned.json
+# 4. Refit the learned model from a tune-half signal dump of the "ppr+" channel:
+python -m benchmarks.musique.scripts.fusion_learned <runs>/tune_pprplus_signal.json \
+  --features query --export src/metronix/retrieval/fusion_models/default.json
 ```
+
+Per-question results of every run in §5.5-§5.7 (ranks of the gold passages, no
+candidate dumps) are in `benchmarks/musique/results/2026-09-27/`.
