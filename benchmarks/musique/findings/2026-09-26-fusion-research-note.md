@@ -309,6 +309,15 @@ which is what the modes of §3.1 are for, and what §4 tests.
 Not run: the models could not be downloaded in this container (see Status). Commands
 are in §8; the protocol is §4.
 
+### 5.6 Scaling defects found on the way (not fusion, but they block graph retrieval)
+
+| Defect | Where | Effect on the HippoRAG MuSiQue graph | Status |
+| --- | --- | --- | --- |
+| PPR subgraph cut at an edge limit in traversal order | `get_ppr_subgraph` | next hop loaded for 67 of 1,000 questions with five anchors (§5.3) | opt-in `SUBGRAPH=specific` |
+| PPR teleport uniform over the subgraph's entities | `recall_graph_ppr_async` | with a hub-heavy subgraph the walk drifts away from the seeds (§5.3) | opt-in `TELEPORT=seeds` / `ranked` |
+| One unlabelled `MATCH (d)` node scan per document label | `get_doc_labels_by_entities`, called by the BFS channel and by post-rerank graph enrichment | up to 31 s per call; the default BFS channel took ~20 s per question | fixed: one labelled query, identical output, 25-240x faster |
+| Graph extraction timeout (300 s) shorter than a capped generation (2,048 tokens at ~6 tokens/s on CPU) | `GRAPH_EXTRACTION_LLM_TIMEOUT` vs `GRAPH_EXTRACTION_MAX_TOKENS` | a looping paragraph is abandoned at 300 s and retried behind its own still-running generation: 20-60 min per paragraph | harness sets the timeout to 900 s; worth aligning the defaults |
+
 ## 6. Negative and null results so far
 
 - On the oracle graph, query-conditioned weights (MoR-style features in

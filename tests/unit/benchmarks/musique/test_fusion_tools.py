@@ -59,3 +59,26 @@ def test_replay_rrf_promotes_graph_only_candidate() -> None:
     assert replay_question(row, "ce", weights, k=2) == ["h0", "d1"]
     summary = replay([row], "rrf", weights, k=2)
     assert summary["recall@2"] == 100.0 and summary["context_both"] == 1
+
+
+def test_learned_train_test_ranks_held_out_gold_first() -> None:
+    from benchmarks.musique.scripts.fusion_learned import train_test
+
+    def question(qid: str) -> dict:
+        # Gold passages: high CE or graph-only with a strong graph score; distractors: low.
+        return {
+            "qid": qid,
+            "gold": ["h0", "h1"],
+            "candidates": [
+                _cand("h0", 0.9, dense=0.03),
+                _cand("d1", 0.2, dense=0.02),
+                _cand("d2", 0.1, dense=0.01),
+                _cand("d3", 0.05, dense=0.005),
+                _cand("h1", 0.02, graph=0.5),
+            ],
+        }
+
+    summary, rows = train_test([question(f"t{i}") for i in range(6)], [question("x")], "static")
+    assert rows[0]["qid"] == "x"
+    assert rows[0]["retrieved_rank"] == {"h0": 1, "h1": 2}
+    assert summary["recall@2"] == 100.0
