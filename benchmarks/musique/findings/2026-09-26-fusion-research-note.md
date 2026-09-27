@@ -384,11 +384,49 @@ fusion change *without* the graph. Tune-half paired comparisons (exploratory):
 Learned fusion (5-fold CV within the tune half, logistic regression): "ppr+" R@5 64.3
 (static features) / 64.9 (query-conditioned); no graph 61.9 / 61.8.
 
-### 5.6 End-to-end: confirm half and 2Wiki
+### 5.6 End-to-end: HippoRAG MuSiQue, confirm half (500 held-out questions)
+
+
+Pre-registered comparisons (paired per question; bootstrap 95% CI; exact sign test):
+
+| comparison | R@2 | R@5 | last hop @5 | both gold in context |
+| --- | --- | --- | --- | --- |
+| **H1** selected `off:calibrated` vs production `bfs:signal` | +0.1 (23 / 24) | **+1.75** (CI 0.3 to 3.2, 60 / 36, **p = 0.018**) | +3.4 (36 / 19, p = 0.03) | -0.4 (3 / 5) |
+| H1 without the 42 questions shared with dev-150 | +0.2 | +2.0 (CI 0.5 to 3.5, 58 / 33, p = 0.012) | +3.7 (p = 0.024) | -0.2 |
+| `off:calibrated` vs cross-encoder-only control | +0.1 | +1.1 (CI -0.5 to 2.7, 58 / 40, p = 0.085) | +2.2 | -0.4 |
+| **H2** "ppr+" `calibrated` vs `off:calibrated` | -1.1 (35 / 55, p = 0.045) | +1.9 (CI -0.1 to 4.0, 81 / 65, p = 0.21) | +5.4 (65 / 38, p = 0.010) | **+10.8** (CI 8.0 to 13.6, **56 / 2**, p < 0.0001) |
+| "ppr+" `calibrated` vs production `bfs:signal` | -0.9 | +3.7 (CI 1.6 to 5.8, 98 / 61, p = 0.004) | +8.8 (73 / 29) | +10.4 (58 / 6) |
+| **H3** learned "ppr+" vs `bfs:signal` | -0.2 (52 / 58) | **+4.5** (CI 2.8 to 6.2, 85 / 31, p < 0.0001) | +8.6 (57 / 14) | +13.4 (71 / 4) |
+| H3 learned "ppr+" vs `off:calibrated` | -0.3 | +2.7 (CI 0.9 to 4.6, 73 / 44, p = 0.009) | +5.2 (51 / 25) | +13.8 (73 / 4) |
+| H3 learned "ppr+" vs learned without graph | -0.5 | +2.2 (CI 0.8 to 3.6, 49 / 25, p = 0.007) | +5.4 (37 / 10) | +12.8 (68 / 4) |
+| H3 learned "ppr+" vs "ppr+" cross-encoder only | -0.7 | +3.1 (CI 1.6 to 4.6, 63 / 26, p = 0.0001) | +6.6 (45 / 12) | +4.2 (25 / 4) |
+| H3 learned "ppr+" vs `bfs:signal`, without dev-150 overlap | -0.9 | +4.0 (CI 2.3 to 5.8, 75 / 29, p < 0.0001) | +7.6 | +11.4 |
+
+Reading, with the caveats that belong to it:
+
+- **H1 holds**: replacing the production blend (\`0.6 * signal + 0.4 * minmax(ce)\`) by the
+  calibrated convex combination gains 1.75 R@5 on held-out questions; the effect shrank
+  from +2.5 on the tune half, as expected after selection. About two thirds of it is
+  simply "stop burying the cross-encoder's tail": the cross-encoder-only control is
+  within 1.1 R@5 of it. No graph is involved, so the pre-registered PR criterion for a
+  graph + dense fusion ("the graph contributes") is not met by the selected
+  configuration.
+- **H2 holds for the answer context, not for R@5**: with "ppr+" both gold passages reach
+  the answer model for 10.8 points more questions (56 wins, 2 losses), and the last hop
+  is in the top 5 more often, while R@2 drops by 1.1 and R@5 moves within noise (tune
+  half -0.5, confirm half +1.9). The two halves disagree on the sign of the R@5
+  difference, which is what "not significant" looks like.
+- **H3 holds on every comparison**, including against the same learned fusion without
+  the graph: the graph channel carries signal that fixed weights do not extract and a
+  logistic regression over 20 features, fitted on 500 other questions of the same set,
+  does. Whether that model transfers to another dataset is tested on 2Wiki below; a
+  model fitted on one benchmark is the obvious overfitting risk.
+
+### 5.7 End-to-end: 2Wiki transfer (1,000 questions)
 
 Pending.
 
-### 5.7 Scaling defects found on the way (not fusion, but they block graph retrieval)
+### 5.8 Scaling defects found on the way (not fusion, but they block graph retrieval)
 
 | Defect | Where | Effect on the HippoRAG MuSiQue graph | Status |
 | --- | --- | --- | --- |
