@@ -34,6 +34,9 @@ graph slice are in §5.10.
    - 2Wiki, a different dataset and graph, never used for fitting: R@5 71.9 → **85.7**
      (+13.8, 338 / 9), R@2 +6.0, both gold passages in context 55.2% → 89.7%; +13.0 R@5
      over the learned fusion without the graph.
+   - Metronix's own qwen2.5:3b graph, 30 dev questions (a consistency check, too small
+     to size the effect): R@5 65.0 → 78.3 (`learned`) / 80.0 (`calibrated`), the last
+     hop in the top 5 10 → 19 / 18 of 30 (§5.10).
 5. **Against published systems** this is not a new state of the art: HippoRAG 2 reaches
    74.7 / 90.4 R@5 with a 7B embedder, and our 137M first stage caps MuSiQue. The gain of
    graph fusion over the same system without it (+2.2 / +13.0; +4.5 / +13.8 over
@@ -563,8 +566,69 @@ session: 16 questions shift by one rank because PPR ties are broken in an order 
 depends on Neo4j element ids, which change when the graph is reloaded (the production
 channel is not bit-reproducible across reloads; the new settings share that property).
 
-**qwen2.5:3b graph slice** (`musique-llm`, 30 questions, 535 passages): pending, the
-CPU extraction (about 45 s per passage) is still running.
+**qwen2.5:3b graph slice** (`musique-llm`: the first 30 questions of the dev slice, all
+2-hop; 535 passages, their own paragraphs plus distractors; graph extracted by Metronix's
+own pipeline with qwen2.5:3b on CPU). The graph is sparse: 5.7 entities per passage,
+12 passages with none. With the right anchor (`ppr_ceiling.py`) the next-hop passage is
+in the channel's subgraph for 21 of 30 questions, and in its top 5 for 21 (one anchor)
+or 13 / 14 (five anchors: production `paths` / `specific` + `seeds`). With a few
+hundred passages the production subgraph is not cut, so offline the `specific` subgraph
+changes little here, unlike on the OpenIE graph (§5.3). End to end, "ppr+" (the `specific`
+subgraph plus the `ranked` teleport) still beats production `ppr-novel` under the same
+fusion (last row of the paired table below); which of the two
+settings carries that on this graph was not ablated.
+
+| configuration | R@2 | R@5 | R@10 | last hop @5 | hop 0 @5 | both gold in context | last hop in context |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ppr+, calibrated | 70.0 | 80.0 | 88.3 | 18 | 30 | 28 | 28 |
+| ppr+, learned | 66.7 | 78.3 | 88.3 | 19 | 28 | 29 | 29 |
+| BFS (prod), rrf | 63.3 | 75.0 | 80.0 | 15 | 30 | 26 | 26 |
+| BFS (prod), calibrated | 66.7 | 73.3 | 80.0 | 14 | 30 | 26 | 26 |
+| PPR -novel (prod), rrf | 56.7 | 71.7 | 80.0 | 14 | 29 | 27 | 27 |
+| no graph, rrf | 56.7 | 70.0 | 78.3 | 12 | 30 | 24 | 24 |
+| PPR -novel (prod), calibrated | 60.0 | 70.0 | 76.7 | 12 | 30 | 26 | 26 |
+| PPR (prod), learned | 56.7 | 68.3 | 75.0 | 13 | 28 | 25 | 25 |
+| no graph, calibrated | 63.3 | 66.7 | 75.0 | 10 | 30 | 24 | 24 |
+| PPR (prod), signal | 56.7 | 65.0 | 75.0 | 10 | 29 | 24 | 24 |
+| BFS (prod), signal | 56.7 | 65.0 | 75.0 | 10 | 29 | 24 | 24 |
+| no graph, learned | 55.0 | 65.0 | 75.0 | 12 | 27 | 24 | 24 |
+| ppr+, signal | 56.7 | 65.0 | 75.0 | 10 | 29 | 25 | 25 |
+| PPR (prod), rrf | 46.7 | 65.0 | 75.0 | 10 | 29 | 25 | 25 |
+| PPR (prod), calibrated | 58.3 | 65.0 | 71.7 | 9 | 30 | 24 | 24 |
+| PPR -novel (prod), signal | 56.7 | 65.0 | 75.0 | 10 | 29 | 24 | 24 |
+| no graph, signal | 56.7 | 65.0 | 75.0 | 10 | 29 | 24 | 24 |
+
+Paired comparisons, 30 questions (A is the configuration after "vs"):
+
+| B vs A | R@2 | R@5 (CI) | wins / losses (R@5) | last hop @5 | both in context |
+| --- | --- | --- | --- | --- | --- |
+| ppr+ `learned` vs `bfs:signal` | +10.0 | +13.3 (3.3 to 23.3) | 10 / 2, p = 0.039 | +30.0 (p = 0.012) | +16.7 (5 / 0, p = 0.063) |
+| ppr+ `calibrated` vs `bfs:signal` | +13.3 | +15.0 (3.3 to 26.7) | 10 / 2, p = 0.039 | +26.7 (p = 0.039) | +13.3 (5 / 1, p = 0.22) |
+| ppr+ `learned` vs no-graph `learned` | +11.7 | +13.3 (5.0 to 23.3) | 9 / 1, p = 0.022 | +23.3 (p = 0.039) | +16.7 (5 / 0, p = 0.063) |
+| ppr+ `calibrated` vs production `ppr-novel:calibrated` | +10.0 | +10.0 (3.3 to 18.3) | 6 / 0, p = 0.031 | +20.0 (p = 0.031) | +6.7 (3 / 1, p = 0.63) |
+
+What this slice does and does not show:
+
+- It reproduces #497's diagnosis on Metronix's own graph: under `signal` every graph
+  mode gives the same R@5 (65.0) as no graph, and the last hop reaches the top 5 in
+  10 of 30 (the earlier REPORT: 9 of 30). The candidates are there: from the same "ppr+"
+  pool, `signal` puts the last hop in the top 5 for 10 questions and `learned` for 19.
+- The direction agrees with the two large sets: the graph-aware fusions ("ppr+" with
+  `calibrated` or `learned`) are the only configurations above 75 R@5, and graph helps
+  `learned` (+13.3 R@5 over the same model without graph). With production channels,
+  `calibrated` and `rrf` gain less (65.0 to 75.0) and `learned` with production PPR
+  (68.3) barely moves.
+- Five of the 30 questions are in the MuSiQue tune half the `learned` model was fitted
+  on. Without them (25 questions) ppr+ `learned` vs `bfs:signal` is +16.0 R@5 (CI 4 to
+  28, 10 / 2), so the result is not carried by them.
+- It is 30 questions: one question moves R@5 by 1.7 to 3.3 points, the confidence
+  intervals are 20 points wide, and no Bonferroni-style correction was applied across
+  the rows above. All 30 were part of the 150-question slice the earlier session used to
+  design the fusion modes. This slice is a consistency check on a small, sparse graph,
+  not evidence of the size of the gain; the effect sizes to quote are the MuSiQue
+  confirm half and 2Wiki (§5.6, §5.7).
+- `learned` loses hop 0 in 2 of 30 questions (the dev slice: 140 vs 145 for
+  `calibrated`); the model trades some first-hop precision for the second hop.
 
 ## 6. Negative and null results
 
@@ -637,5 +701,9 @@ python -m benchmarks.musique.scripts.fusion_learned <runs>/tune_pprplus_signal.j
   --features query --export src/metronix/retrieval/fusion_models/default.json
 ```
 
-Per-question results of every run in §5.5-§5.7 (ranks of the gold passages, no
-candidate dumps) are in `benchmarks/musique/results/2026-09-27/`.
+The dev and qwen2.5:3b slices (§5.10) are built as in the handoff note (`convert.py`,
+`--graph llm` for `musique-llm`; set `GRAPH_EXTRACTION_LLM_TIMEOUT=900` or more on CPU,
+§5.9) and run with the same `pipeline_probe` commands without `--skip-graph-enrichment`.
+
+Per-question results of every run in §5.5-§5.7 and §5.10 (ranks of the gold passages,
+no candidate dumps) are in `benchmarks/musique/results/2026-09-27/`.

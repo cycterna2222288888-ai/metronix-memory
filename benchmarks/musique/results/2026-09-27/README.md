@@ -1,6 +1,6 @@
 # Runs for the #497 fusion research note
 
-`pipeline_probe` results behind §5.5-§5.7 of
+`pipeline_probe` results behind §5.5-§5.7 and §5.10 of
 `../../findings/2026-09-26-fusion-research-note.md`, one gzipped JSON per dataset:
 `{run name: {"summary": ..., "rows": [per question: qid, gold, retrieved_rank,
 context_rank, context_hop0, context_last_hop, context_both]}}`. Candidate dumps are left
@@ -10,6 +10,8 @@ Run names: `<half>[-<group>]_<graph>_<fusion>`.
 
 - half: `tune` (even question index), `confirm` (odd), `all` (2Wiki, 1,000 questions),
   `dev` (the 150-question oracle-graph slice, `musique_dev_oracle_runs.json.gz`);
+  `llm` (the first 30 dev questions on the qwen2.5:3b graph, `musique_llm_qwen_runs.json.gz`;
+  graph enrichment on, as for `dev`);
 - group: none = production channel settings; `pprplus` = PPR with
   `SUBGRAPH=specific`, `TELEPORT=ranked`, anchors excluded; `ceonly` = `rrf` with
   weights `rerank=1,dense=0,graph=0,metadata=0`; `dense` = `RERANKER_ENABLED=false`;
