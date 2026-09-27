@@ -57,3 +57,33 @@ The same discipline applies at benchmark scale. The PPR evaluation runbook
 flag per comparison leg, so a regression is attributable to the flag and not
 to drift in datasets, models, or host state. Use it when a change survives
 the fast eval loop and you need frozen flag-off/flag-on evidence.
+
+## Multi-hop graph + dense fusion (opt-in, #497)
+
+All of these default to the previous behaviour. They were evaluated end to end on the
+HippoRAG MuSiQue and 2Wiki sets; the methodology, every number and the caveats are in
+`benchmarks/musique/findings/2026-09-26-fusion-research-note.md`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `METRONIX_RETRIEVAL_FUSION_MODE` | `signal` | final ranking after rerank: `signal` (signal score blended with the min-max cross-encoder score), `rrf`, `calibrated`, `bridge` or `learned` |
+| `METRONIX_RETRIEVAL_FUSION_MODEL` | empty | model JSON for `learned`; empty = `src/metronix/retrieval/fusion_models/default.json` |
+| `METRONIX_RETRIEVAL_FUSION_WEIGHTS` | empty | per-channel weights for `rrf` / `calibrated` / `bridge`, e.g. `rerank=1,dense=0` |
+| `METRONIX_RETRIEVAL_GRAPH_PPR_SUBGRAPH` | `paths` | `specific` grows the PPR subgraph from the least-mentioned seed entities, skipping hubs |
+| `METRONIX_RETRIEVAL_GRAPH_PPR_MAX_DOCS` / `_HUB_CAP` | 100 / 200 | budget of the `specific` subgraph |
+| `METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT` | `subgraph` | `seeds` teleports to the seed entities; `ranked` weights them by the dense rank of the anchors that mention them |
+| `METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT_RANK_POWER` | 1.0 | exponent of the `ranked` weights |
+
+The configuration measured best for multi-hop questions:
+
+```bash
+METRONIX_RETRIEVAL_GRAPH_PPR_ENABLED=true
+METRONIX_RETRIEVAL_GRAPH_PPR_EXCLUDE_DENSE_ANCHORS=true
+METRONIX_RETRIEVAL_GRAPH_PPR_SUBGRAPH=specific
+METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT=ranked
+METRONIX_RETRIEVAL_FUSION_MODE=learned
+```
+
+The shipped `learned` model was fitted on benchmark questions (Wikipedia paragraphs),
+not on a Metronix workspace. Before enabling it for a workspace, run `make eval-compare`
+as above; `calibrated` is the fixed-weight alternative that needs no model.
