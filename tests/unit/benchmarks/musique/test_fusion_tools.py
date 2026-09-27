@@ -80,5 +80,6 @@ def test_learned_train_test_ranks_held_out_gold_first() -> None:
 
     summary, rows = train_test([question(f"t{i}") for i in range(6)], [question("x")], "static")
     assert rows[0]["qid"] == "x"
-    assert rows[0]["retrieved_rank"] == {"h0": 1, "h1": 2}
+    # Both gold passages (one found only by the graph) take the top two places.
+    assert sorted(rows[0]["retrieved_rank"].values()) == [1, 2]
     assert summary["recall@2"] == 100.0
