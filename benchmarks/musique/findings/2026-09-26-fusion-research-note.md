@@ -157,6 +157,25 @@ default), `ppr:signal`, the selected fusion without graph (`off`), both cross-en
 controls and dense only. Paired per question: bootstrap 95% CI and exact sign test
 (`compare_runs.py`), overall and per hop count (2/3/4).
 
+**Amendment, fixed after the tune half and before any confirm-half run** (commit
+timestamp): the tune half showed the graph helping the answer context (both gold passages
+in the top 25) far more than R@5, and a cross-validated learned fusion with "ppr+"
+beating every hand-set fusion. Two secondary hypotheses are therefore added for the
+confirm half, and one deviation recorded:
+
+- H2: "ppr+" vs no graph under the same fusion (`calibrated`) on *both gold passages in
+  the answer context* (the "gold in `fragments`" metric of the task).
+- H3: learned fusion (logistic regression, `fusion_learned.py`, feature set chosen by
+  tune-half 5-fold CV R@5: `query`, 64.9 vs `static` 64.3), fitted on all tune-half
+  questions of the "ppr+" `signal` dump and applied unchanged to the confirm half,
+  against the selected hand-set configuration and against the same learned fusion
+  without graph (fitted on `off:signal`).
+- Deviation: `ppr:bridge` and `ppr-novel:bridge` were not run. The production PPR
+  channels add no graph-only gold passage to the candidate pool on this graph
+  (tune half: 0), so `bridge` could only re-score non-gold candidates, and each run
+  costs about 5 hours of CPU (the conditional cross-encoder pairs are 3-4x longer).
+  "ppr+" `bridge` was run.
+
 **PR criterion** (#497): the selected configuration beats `bfs:signal` on the confirm
 half with sign-test p < 0.05 on R@5, beats its own `off` control (the graph contributes),
 and does not lose to the cross-encoder-only control on the same channel.
