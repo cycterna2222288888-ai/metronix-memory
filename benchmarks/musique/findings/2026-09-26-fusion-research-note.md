@@ -529,6 +529,43 @@ None of these numbers is a new state of the art.
 | One unlabelled `MATCH (d)` node scan per document label | `get_doc_labels_by_entities`, called by the BFS channel and by post-rerank graph enrichment | up to 31 s per call; the default BFS channel took ~20 s per question | fixed: one labelled query, identical output, 25-240x faster |
 | Graph extraction timeout (300 s) shorter than a capped generation (2,048 tokens at ~6 tokens/s on CPU) | `GRAPH_EXTRACTION_LLM_TIMEOUT` vs `GRAPH_EXTRACTION_MAX_TOKENS` | a looping paragraph is abandoned at 300 s and retried behind its own still-running generation: 20-60 min per paragraph | harness sets the timeout to 900 s; worth aligning the defaults |
 
+### 5.10 The 150-question dev slice (oracle graph) and the qwen2.5:3b graph slice
+
+**Dev slice, oracle graph** (continuity with the earlier session; the oracle topology
+leaks gold, §5.2, so none of this selects anything). Same pipeline, 150 questions,
+graph enrichment on, cross-encoder cache from the earlier session:
+
+| configuration | R@2 | R@5 | R@10 | last hop @5 | hop 0 @5 | both gold in context | last hop in context |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ppr+, learned | 71.3 | 89.3 | 95.3 | 128 | 140 | 146 | 148 |
+| ppr+, calibrated | 67.7 | 88.3 | 95.7 | 120 | 145 | 145 | 147 |
+| PPR -novel (prod), calibrated | 68.0 | 88.0 | 95.0 | 119 | 145 | 142 | 144 |
+| PPR (prod), rrf | 60.3 | 85.0 | 91.7 | 108 | 147 | 140 | 142 |
+| PPR -novel (prod), rrf | 64.0 | 83.3 | 95.3 | 111 | 139 | 146 | 147 |
+| PPR (prod), calibrated | 67.7 | 81.7 | 84.7 | 99 | 146 | 120 | 122 |
+| PPR (prod), learned | 62.7 | 81.0 | 89.7 | 103 | 140 | 140 | 142 |
+| BFS (prod), calibrated | 67.0 | 80.3 | 85.0 | 97 | 144 | 121 | 123 |
+| BFS (prod), rrf | 65.7 | 77.3 | 85.3 | 91 | 141 | 121 | 123 |
+| no graph, calibrated | 55.0 | 68.7 | 73.7 | 63 | 143 | 93 | 95 |
+| ppr+, signal | 55.3 | 67.3 | 77.7 | 62 | 140 | 109 | 111 |
+| PPR -novel (prod), signal | 55.3 | 67.3 | 77.7 | 62 | 140 | 109 | 111 |
+| no graph, rrf | 55.3 | 67.0 | 76.0 | 62 | 139 | 95 | 97 |
+| PPR (prod), signal | 55.0 | 66.7 | 77.0 | 60 | 140 | 105 | 107 |
+| BFS (prod), signal | 55.0 | 66.3 | 76.3 | 59 | 140 | 102 | 104 |
+| no graph, signal | 54.7 | 65.0 | 74.3 | 55 | 140 | 95 | 97 |
+
+`off:signal` reproduces the earlier session exactly (R@2 54.67, R@5 65.00, both in
+context 95). On this graph every graph-aware fusion looks excellent (R@5 up to 89.3), as
+the earlier session found; "ppr+" and production `ppr-novel` are identical under
+`signal` because the channel settings change nothing on a graph whose subgraphs hold two
+passages (§5.3). Production `ppr:rrf` gives R@5 85.00 here vs 84.67 in the earlier
+session: 16 questions shift by one rank because PPR ties are broken in an order that
+depends on Neo4j element ids, which change when the graph is reloaded (the production
+channel is not bit-reproducible across reloads; the new settings share that property).
+
+**qwen2.5:3b graph slice** (`musique-llm`, 30 questions, 535 passages): pending, the
+CPU extraction (about 45 s per passage) is still running.
+
 ## 6. Negative and null results
 
 - **Equal-vote `rrf` with a noisy graph channel**: R@2 falls from 45.2 to 35.4 on the

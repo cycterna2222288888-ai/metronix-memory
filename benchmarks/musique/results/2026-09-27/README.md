@@ -8,7 +8,8 @@ out (tens of MB); rerun with `--trace` to regenerate them.
 
 Run names: `<half>[-<group>]_<graph>_<fusion>`.
 
-- half: `tune` (even question index), `confirm` (odd), `all` (2Wiki, 1,000 questions);
+- half: `tune` (even question index), `confirm` (odd), `all` (2Wiki, 1,000 questions),
+  `dev` (the 150-question oracle-graph slice, `musique_dev_oracle_runs.json.gz`);
 - group: none = production channel settings; `pprplus` = PPR with
   `SUBGRAPH=specific`, `TELEPORT=ranked`, anchors excluded; `ceonly` = `rrf` with
   weights `rerank=1,dense=0,graph=0,metadata=0`; `dense` = `RERANKER_ENABLED=false`;
