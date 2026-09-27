@@ -3,8 +3,10 @@
 `pipeline_probe` results behind §5.5-§5.7 and §5.10 of
 `../../findings/2026-09-26-fusion-research-note.md`, one gzipped JSON per dataset:
 `{run name: {"summary": ..., "rows": [per question: qid, gold, retrieved_rank,
-context_rank, context_hop0, context_last_hop, context_both]}}`. Candidate dumps are left
-out (tens of MB); rerun with `--trace` to regenerate them.
+context_rank, context_hop0, context_last_hop, context_both, and for traced runs
+pool_gold, pool_graph_only_gold, pool_size]}}`. Candidate dumps are left out (tens of
+MB); rerun with `--trace` to regenerate them. The pool fields are what
+`pool_coverage.py` needs for the candidate-pool numbers of the note (§5.5-§5.7).
 
 Run names: `<half>[-<group>]_<graph>_<fusion>`.
 

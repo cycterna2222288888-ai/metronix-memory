@@ -696,6 +696,7 @@ python -m benchmarks.musique.scripts.pipeline_probe --workspace musique-hipporag
   --env METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT=ranked \
   --trace --skip-graph-enrichment --rerank-cache <out>/ce.jsonl --output <runs>/learned.json
 python -m benchmarks.musique.scripts.compare_runs <runs>/prod.json <runs>/learned.json
+python -m benchmarks.musique.scripts.pool_coverage <runs>/prod.json <runs>/learned.json
 # 4. Refit the learned model from a tune-half signal dump of the "ppr+" channel:
 python -m benchmarks.musique.scripts.fusion_learned <runs>/tune_pprplus_signal.json \
   --features query --export src/metronix/retrieval/fusion_models/default.json

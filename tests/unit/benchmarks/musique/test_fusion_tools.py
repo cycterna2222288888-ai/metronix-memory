@@ -83,3 +83,30 @@ def test_learned_train_test_ranks_held_out_gold_first() -> None:
     # Both gold passages (one found only by the graph) take the top two places.
     assert sorted(rows[0]["retrieved_rank"].values()) == [1, 2]
     assert summary["recall@2"] == 100.0
+
+
+def test_pool_coverage_from_trace_and_compact_rows() -> None:
+    from benchmarks.musique.scripts.pool_coverage import coverage, pool_fields
+
+    traced = {
+        "qid": "q",
+        "gold": ["g0", "g1"],
+        "candidates": [
+            {"doc_label": "g0", "channel_scores": {"dense": 0.9}},
+            {"doc_label": "g1", "channel_scores": {"graph": 0.4}},
+            {"doc_label": "x", "channel_scores": {"dense": 0.5, "graph": 0.1}},
+        ],
+    }
+    compact = {"qid": "q", "gold": ["g0", "g1"], **pool_fields(traced)}
+    assert compact["pool_gold"] == ["g0", "g1"]
+    assert compact["pool_graph_only_gold"] == ["g1"]
+    expected = {
+        "questions": 1,
+        "gold_share": 100.0,
+        "last_hop_in_pool": 1,
+        "pool_size": 3.0,
+        "graph_only_gold": 1,
+    }
+    assert coverage([traced]) == expected
+    assert coverage([compact]) == expected
+    assert coverage([{"qid": "q", "gold": ["g0"]}]) is None
