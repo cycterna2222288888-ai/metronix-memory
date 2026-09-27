@@ -103,8 +103,6 @@ def test_ppr_subgraph_limits_nodes_in_stable_order(mock_get_driver: MagicMock) -
 
 @patch("metronix.storage.graph_ops.get_graph_driver")
 def test_ppr_subgraph_logs_truncation(mock_get_driver: MagicMock) -> None:
-    from structlog.testing import capture_logs
-
     session = MagicMock()
     session.run.return_value = [
         _record("entity:z", None, ["Entity"], "document:z", "DOC-Z", ["Document"], "MENTIONS", 1),
@@ -112,15 +110,18 @@ def test_ppr_subgraph_logs_truncation(mock_get_driver: MagicMock) -> None:
     ]
     mock_get_driver.return_value.session.return_value.__enter__.return_value = session
 
-    with capture_logs() as logs:
-        get_ppr_subgraph(["A"], "workspace-a", max_nodes=10)
-    assert not [e for e in logs if e["event"] == "graph_ppr.subgraph_truncated"]
+    def truncation_events(log: MagicMock) -> list:
+        return [c for c in log.info.call_args_list if c.args == ("graph_ppr.subgraph_truncated",)]
 
-    with capture_logs() as logs:
+    with patch("metronix.storage.graph_ops.logger") as log:
+        get_ppr_subgraph(["A"], "workspace-a", max_nodes=10)
+    assert truncation_events(log) == []
+
+    with patch("metronix.storage.graph_ops.logger") as log:
         get_ppr_subgraph(["A"], "workspace-a", max_nodes=2)
-    (event,) = [e for e in logs if e["event"] == "graph_ppr.subgraph_truncated"]
-    assert event["node_cap_hit"] is True
-    assert event["edge_limit"] == 16
+    (event,) = truncation_events(log)
+    assert event.kwargs["node_cap_hit"] is True
+    assert event.kwargs["edge_limit"] == 16
 
 
 def _specific_session(seeds, seed_docs, doc_entities, aliases) -> MagicMock:
