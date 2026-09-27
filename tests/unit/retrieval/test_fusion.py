@@ -105,3 +105,58 @@ def test_resolve_mode_and_parse_weights() -> None:
     assert weights["graph"] == 0.5 and weights["rerank"] == 2.0
     assert weights["dense"] == DEFAULT_WEIGHTS["calibrated"]["dense"]
     assert parse_weights("", "signal") == {}
+
+
+def _pool() -> list[dict]:
+    return [
+        {"id": "a", "channel_scores": {"dense": 0.03}, "ce": 0.9},
+        {"id": "b", "channel_scores": {"dense": 0.02, "graph": 0.1}, "ce": 0.2},
+        {"id": "c", "channel_scores": {"graph": 0.4}, "ce": 0.01},
+    ]
+
+
+def test_learned_features_shapes_and_flags() -> None:
+    from metronix.retrieval.fusion import learned_features
+
+    ids, rows = learned_features(_pool(), "static")
+    assert ids == ["a", "b", "c"]
+    assert all(len(r) == 8 for r in rows)
+    # presence flags: dense, graph
+    assert (rows[0][4], rows[0][7]) == (1.0, 0.0)
+    assert (rows[2][4], rows[2][7]) == (0.0, 1.0)
+    # graph score normalised by the pool maximum
+    assert rows[2][5] == 1.0 and rows[1][5] == 0.25
+    _, qrows = learned_features(_pool(), "query")
+    assert all(len(r) == 20 for r in qrows)
+
+
+def test_learned_scores_apply_linear_model(tmp_path) -> None:
+    import json
+
+    from metronix.retrieval.fusion import learned_scores, load_learned_model
+
+    # Weight only the graph-presence flag: graph candidates must outrank the rest.
+    model = {
+        "feature_set": "static",
+        "mean": [0.0] * 8,
+        "scale": [1.0] * 8,
+        "coef": [0, 0, 0, 0, 0, 0, 0, 1.0],
+        "intercept": 0.0,
+    }
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps(model))
+    scores = learned_scores(_pool(), load_learned_model(str(path)))
+    assert scores["b"] == scores["c"] == 1.0 and scores["a"] == 0.0
+
+
+def test_default_learned_model_loads() -> None:
+    from metronix.retrieval.fusion import DEFAULT_LEARNED_MODEL, load_learned_model
+
+    model = load_learned_model(str(DEFAULT_LEARNED_MODEL))
+    assert model["feature_set"] == "query" and len(model["coef"]) == 20
+
+
+def test_resolve_mode_accepts_learned() -> None:
+    from metronix.retrieval.fusion import resolve_mode
+
+    assert resolve_mode("learned") == "learned"

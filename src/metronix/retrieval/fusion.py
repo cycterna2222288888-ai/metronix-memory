@@ -19,6 +19,12 @@ The modes here are opt-in and leave ``signal`` untouched:
     "TM2C2"): dense and graph scores are divided by their per-query maximum (theoretical
     minimum 0), the cross-encoder keeps its sigmoid probability instead of being min-max
     stretched over the pool, and the three are mixed with fixed weights.
+``learned``
+    A logistic-regression combination of the same evidence (cross-encoder probability
+    and rank, per-channel scores and ranks, presence flags, and query-level confidence
+    signals multiplied into the channel features), with coefficients fitted offline on
+    a labelled benchmark split and shipped as a small JSON file
+    (``METRONIX_RETRIEVAL_FUSION_MODEL``). Only the linear score is used, for ranking.
 ``bridge``
     Chain-conditioned cross-encoder scoring for graph candidates. A bridge paragraph of a
     multi-hop question shares no terms with the question, so the cross-encoder, which
@@ -35,10 +41,14 @@ All functions are pure; ``search.py`` wires them in.
 
 from __future__ import annotations
 
+import json
+import math
 from collections.abc import Iterable, Mapping, Sequence
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-FUSION_MODES = ("signal", "rrf", "calibrated", "bridge")
+FUSION_MODES = ("signal", "rrf", "calibrated", "bridge", "learned")
 
 # Channels that carry a query-level ranking. "exact" and "metadata" hits are
 # filter matches with constant scores; they are fused as one "metadata" list.
@@ -51,6 +61,8 @@ DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
     "rrf": {"rerank": 1.0, "dense": 1.0, "graph": 1.0, "metadata": 1.0},
     "calibrated": {"rerank": 0.5, "dense": 0.25, "graph": 0.25, "metadata": 0.25},
     "bridge": {"rerank": 0.5, "dense": 0.25, "graph": 0.25, "metadata": 0.25},
+    # learned mode falls back to calibrated weights when no model can be loaded
+    "learned": {"rerank": 0.5, "dense": 0.25, "graph": 0.25, "metadata": 0.25},
 }
 
 
@@ -198,3 +210,92 @@ def bridge_query(query: str, anchor_text: str, max_chars: int = 1200) -> str:
 def chain_score(anchor_prob: float, conditional_prob: float) -> float:
     """Path score of a two-passage chain: P(anchor | q) * P(candidate | q + anchor)."""
     return max(anchor_prob, 0.0) * max(conditional_prob, 0.0)
+
+
+# -- learned fusion ---------------------------------------------------------------------
+
+LEARNED_FEATURE_SETS = ("static", "query")
+# Fitted on the tune half of the HippoRAG MuSiQue set with the "ppr+" graph channel;
+# see benchmarks/musique/findings/2026-09-26-fusion-research-note.md.
+DEFAULT_LEARNED_MODEL = Path(__file__).parent / "fusion_models" / "default.json"
+
+
+def _logit(p: float) -> float:
+    p = min(max(p, 1e-6), 1 - 1e-6)
+    return math.log(p / (1 - p))
+
+
+def learned_features(
+    candidates: Sequence[Mapping[str, Any]], feature_set: str = "query"
+) -> tuple[list[str], list[list[float]]]:
+    """Feature rows for the reranked pool, one per candidate (ids in input order).
+
+    ``candidates`` carry ``id``, ``channel_scores`` (raw recall-channel scores) and
+    ``ce`` (the cross-encoder probability). ``static``: cross-encoder log-odds and
+    reciprocal rank; dense and graph scores normalised by their pool maximum, reciprocal
+    ranks and presence flags. ``query`` adds the top cross-encoder probability, its
+    margin over the second and the graph channel's share of mass on its top candidate,
+    each multiplied into the dense and graph features, so channel weights can vary per
+    query. The benchmark harness fits models on exactly these rows.
+    """
+    ids = [str(c["id"]) for c in candidates]
+    merged = [
+        {"chunk_id": cid, "channel_scores": c.get("channel_scores") or {}}
+        for cid, c in zip(ids, candidates, strict=True)
+    ]
+    ranks = channel_rankings(merged)
+    ce = {cid: float(c.get("ce") or 0.0) for cid, c in zip(ids, candidates, strict=True)}
+    ce_rank = ranking_from_scores(ce)
+    dense = max_normalize({m["chunk_id"]: m["channel_scores"].get("dense", 0.0) for m in merged})
+    graph = max_normalize({m["chunk_id"]: m["channel_scores"].get("graph", 0.0) for m in merged})
+    ce_sorted = sorted(ce.values(), reverse=True) + [0.0, 0.0]
+    graph_raw = [m["channel_scores"].get("graph", 0.0) for m in merged]
+    graph_share = max(graph_raw) / sum(graph_raw) if graph_raw and sum(graph_raw) > 0 else 0.0
+    query_feats = [ce_sorted[0], ce_sorted[0] - ce_sorted[1], graph_share]
+    rows: list[list[float]] = []
+    for cid in ids:
+        in_dense = float(cid in ranks.get("dense", {}))
+        in_graph = float(cid in ranks.get("graph", {}))
+        row = [
+            _logit(ce[cid]),
+            1.0 / (60 + ce_rank[cid]),
+            dense.get(cid, 0.0),
+            1.0 / (60 + ranks["dense"][cid]) if in_dense else 0.0,
+            in_dense,
+            graph.get(cid, 0.0),
+            1.0 / (60 + ranks["graph"][cid]) if in_graph else 0.0,
+            in_graph,
+        ]
+        if feature_set == "query":
+            channel = [dense.get(cid, 0.0), in_dense, graph.get(cid, 0.0), in_graph]
+            row += [q * f for q in query_feats for f in channel]
+        rows.append(row)
+    return ids, rows
+
+
+@lru_cache(maxsize=4)
+def load_learned_model(path: str) -> dict[str, Any]:
+    """A fitted model: ``feature_set``, ``mean``, ``scale``, ``coef``, ``intercept``."""
+    model = json.loads(Path(path).read_text(encoding="utf-8"))
+    width = len(model["coef"])
+    if model.get("feature_set") not in LEARNED_FEATURE_SETS:
+        raise ValueError(f"unknown feature_set in {path}")
+    if len(model["mean"]) != width or len(model["scale"]) != width:
+        raise ValueError(f"inconsistent model dimensions in {path}")
+    return model
+
+
+def learned_scores(
+    candidates: Sequence[Mapping[str, Any]], model: Mapping[str, Any]
+) -> dict[str, float]:
+    """Linear score of the fitted model for every candidate (higher ranks first)."""
+    ids, rows = learned_features(candidates, model["feature_set"])
+    coef, mean, scale = model["coef"], model["mean"], model["scale"]
+    intercept = float(model.get("intercept", 0.0))
+    out: dict[str, float] = {}
+    for cid, row in zip(ids, rows, strict=True):
+        out[cid] = intercept + sum(
+            c * (x - m) / (sd if sd else 1.0)
+            for c, x, m, sd in zip(coef, row, mean, scale, strict=True)
+        )
+    return out

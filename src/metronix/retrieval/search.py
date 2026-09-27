@@ -38,10 +38,13 @@ from metronix.retrieval.channels import (
     recall_metadata_async,
 )
 from metronix.retrieval.fusion import (
+    DEFAULT_LEARNED_MODEL,
     bridge_query,
     calibrated_scores,
     chain_score,
     channel_rankings,
+    learned_scores,
+    load_learned_model,
     parse_weights,
     pick_anchor,
     ranking_from_scores,
@@ -981,6 +984,24 @@ def _fused_scores(
         ce = _bridge_scores(query, reranked, ids, ce, merged, workspace_id)
 
     by_id = {mr["chunk_id"]: mr for mr in merged}
+    if mode == "learned":
+        try:
+            model = load_learned_model(_s.retrieval_fusion_model or str(DEFAULT_LEARNED_MODEL))
+        except (OSError, ValueError, KeyError):
+            logger.warning("search.fusion.learned_model_unavailable", exc_info=True)
+        else:
+            return learned_scores(
+                [
+                    {
+                        "id": cid,
+                        "channel_scores": by_id.get(cid, {}).get("channel_scores") or {},
+                        "ce": ce[cid],
+                    }
+                    for cid in ids
+                ],
+                model,
+            )
+
     channel_scores: dict[str, dict[str, float]] = {"rerank": ce}
     for cid in ids:
         for channel, score in (by_id.get(cid, {}).get("channel_scores") or {}).items():

@@ -323,6 +323,9 @@ class Settings(BaseSettings):
     retrieval_fusion_bridge_scope: str = Field(
         "graph", alias="METRONIX_RETRIEVAL_FUSION_BRIDGE_SCOPE"
     )
+    # learned mode: fitted model JSON (see metronix.retrieval.fusion.learned_scores);
+    # empty = the model shipped with the package (fusion_models/default.json).
+    retrieval_fusion_model: str = Field("", alias="METRONIX_RETRIEVAL_FUSION_MODEL")
     # MTRNIX-397 (B0): FAST-LLM slot extraction feeds channel triggers (dates/people/jira
     # keys/entities/activity) on top of regex. Default off — when off the regex path is used
     # unchanged. Hardened: timeout + strict JSON parse + fallback to regex on any failure.

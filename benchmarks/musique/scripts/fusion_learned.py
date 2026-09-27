@@ -18,85 +18,84 @@ Feature sets:
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 import numpy as np
 
 from benchmarks.musique.scripts.pipeline_probe import aggregate, gold_positions
-from metronix.retrieval.fusion import channel_rankings, max_normalize, ranking_from_scores
-
-
-def _logit(p: float) -> float:
-    p = min(max(p, 1e-6), 1 - 1e-6)
-    return math.log(p / (1 - p))
+from metronix.retrieval.fusion import learned_features
 
 
 def question_features(row: dict, feature_set: str) -> tuple[list[str], np.ndarray]:
-    cands = [c for c in row["candidates"] if c.get("ce") is not None]
-    labels = [c["doc_label"] for c in cands]
-    merged = [{"chunk_id": c["doc_label"], "channel_scores": c["channel_scores"]} for c in cands]
-    ranks = channel_rankings(merged)
-    ce = {c["doc_label"]: float(c["ce"]) for c in cands}
-    ce_rank = ranking_from_scores(ce)
-    dense = max_normalize({c["doc_label"]: c["channel_scores"].get("dense", 0.0) for c in cands})
-    graph = max_normalize({c["doc_label"]: c["channel_scores"].get("graph", 0.0) for c in cands})
-    ce_sorted = sorted(ce.values(), reverse=True) + [0.0, 0.0]
-    graph_raw = [c["channel_scores"].get("graph", 0.0) for c in cands]
-    graph_share = max(graph_raw) / sum(graph_raw) if sum(graph_raw) > 0 else 0.0
-    query_feats = [ce_sorted[0], ce_sorted[0] - ce_sorted[1], graph_share]
-    rows = []
-    for label in labels:
-        in_dense = float(label in ranks.get("dense", {}))
-        in_graph = float(label in ranks.get("graph", {}))
-        base = [
-            _logit(ce[label]),
-            1.0 / (60 + ce_rank[label]),
-            dense[label],
-            1.0 / (60 + ranks["dense"][label]) if in_dense else 0.0,
-            in_dense,
-            graph[label],
-            1.0 / (60 + ranks["graph"][label]) if in_graph else 0.0,
-            in_graph,
-        ]
-        if feature_set == "query":
-            channel = [dense[label], in_dense, graph[label], in_graph]
-            base += [q * f for q in query_feats for f in channel]
-        rows.append(base)
+    """Feature rows of a dumped question's reranked pool (``fusion.learned_features``)."""
+    cands = [
+        {"id": c["doc_label"], "channel_scores": c["channel_scores"], "ce": c["ce"]}
+        for c in row["candidates"]
+        if c.get("ce") is not None
+    ]
+    if not cands:
+        return [], np.zeros((0, 0))
+    labels, rows = learned_features(cands, feature_set)
     return labels, np.array(rows, dtype=float)
 
 
-def cross_validate(rows: list[dict], feature_set: str, folds: int = 5, k: int = 25) -> dict:
+def fit(rows: list[dict], feature_set: str):
+    """Scaler and logistic regression fitted on every candidate of ``rows``."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
 
     data = [(row, *question_features(row, feature_set)) for row in rows]
+    data = [d for d in data if d[1]]
+    x = np.vstack([feats for _, _, feats in data])
+    y = np.concatenate([[float(lbl in row["gold"]) for lbl in labels] for row, labels, _ in data])
+    scaler = StandardScaler().fit(x)
+    model = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
+    model.fit(scaler.transform(x), y)
+    return scaler, model
+
+
+def export_model(scaler, model, feature_set: str, trained_on: str) -> dict:
+    """The JSON form ``metronix.retrieval.fusion.learned_scores`` reads."""
+    return {
+        "feature_set": feature_set,
+        "mean": [float(v) for v in scaler.mean_],
+        "scale": [float(v) for v in scaler.scale_],
+        "coef": [float(v) for v in model.coef_[0]],
+        "intercept": float(model.intercept_[0]),
+        "trained_on": trained_on,
+    }
+
+
+def cross_validate(rows: list[dict], feature_set: str, folds: int = 5, k: int = 25) -> dict:
     scored = []
     for fold in range(folds):
-        train = [d for i, d in enumerate(data) if i % folds != fold]
-        test = [d for i, d in enumerate(data) if i % folds == fold]
-        x = np.vstack([feats for _, _, feats in train])
-        y = np.concatenate(
-            [[float(lbl in row["gold"]) for lbl in labels] for row, labels, _ in train]
-        )
-        scaler = StandardScaler().fit(x)
-        model = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-        model.fit(scaler.transform(x), y)
-        for row, labels, feats in test:
-            prob = model.predict_proba(scaler.transform(feats))[:, 1]
-            top = [labels[i] for i in np.argsort(-prob)][:k]
-            ranks = gold_positions(row["gold"], top)
-            scored.append(
-                {
-                    "gold": row["gold"],
-                    "retrieved_rank": ranks,
-                    "context_hop0": ranks[row["gold"][0]] is not None,
-                    "context_last_hop": ranks[row["gold"][-1]] is not None,
-                    "context_both": all(v is not None for v in ranks.values()),
-                    "context_docs": len(top),
-                }
-            )
+        train = [row for i, row in enumerate(rows) if i % folds != fold]
+        test = [row for i, row in enumerate(rows) if i % folds == fold]
+        scaler, model = fit(train, feature_set)
+        scored += _rank(test, scaler, model, feature_set, k)
     return aggregate(scored)
+
+
+def _rank(rows: list[dict], scaler, model, feature_set: str, k: int) -> list[dict]:
+    scored = []
+    for row in rows:
+        labels, feats = question_features(row, feature_set)
+        prob = model.decision_function(scaler.transform(feats)) if labels else np.array([])
+        top = [labels[i] for i in np.argsort(-prob, kind="stable")][:k]
+        ranks = gold_positions(row["gold"], top)
+        scored.append(
+            {
+                "qid": row.get("qid"),
+                "gold": row["gold"],
+                "retrieved_rank": ranks,
+                "context_rank": ranks,
+                "context_hop0": ranks[row["gold"][0]] is not None,
+                "context_last_hop": ranks[row["gold"][-1]] is not None,
+                "context_both": all(v is not None for v in ranks.values()),
+                "context_docs": len(top),
+            }
+        )
+    return scored
 
 
 def train_test(
@@ -107,33 +106,8 @@ def train_test(
     Returns the probe metrics and per-question rows in ``pipeline_probe`` shape, so the
     result can be compared with ``compare_runs.py``.
     """
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.preprocessing import StandardScaler
-
-    train = [(row, *question_features(row, feature_set)) for row in train_rows]
-    x = np.vstack([feats for _, _, feats in train])
-    y = np.concatenate([[float(lbl in row["gold"]) for lbl in labels] for row, labels, _ in train])
-    scaler = StandardScaler().fit(x)
-    model = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced")
-    model.fit(scaler.transform(x), y)
-    scored = []
-    for row in test_rows:
-        labels, feats = question_features(row, feature_set)
-        prob = model.predict_proba(scaler.transform(feats))[:, 1] if labels else np.array([])
-        top = [labels[i] for i in np.argsort(-prob)][:k]
-        ranks = gold_positions(row["gold"], top)
-        scored.append(
-            {
-                "qid": row["qid"],
-                "gold": row["gold"],
-                "retrieved_rank": ranks,
-                "context_rank": ranks,
-                "context_hop0": ranks[row["gold"][0]] is not None,
-                "context_last_hop": ranks[row["gold"][-1]] is not None,
-                "context_both": all(v is not None for v in ranks.values()),
-                "context_docs": len(top),
-            }
-        )
+    scaler, model = fit(train_rows, feature_set)
+    scored = _rank(test_rows, scaler, model, feature_set, k)
     return aggregate(scored), scored
 
 
@@ -148,8 +122,20 @@ def main() -> None:
         "--test", type=Path, help="fit on all of TRACE and evaluate on this held-out dump"
     )
     parser.add_argument("--output", type=Path, help="with --test: per-question rows")
+    parser.add_argument(
+        "--export", type=Path, help="fit on all of TRACE and write the model JSON here"
+    )
     args = parser.parse_args()
     rows = json.loads(args.trace.read_text(encoding="utf-8"))["rows"]
+    if args.export:
+        scaler, model = fit(rows, args.features)
+        args.export.write_text(
+            json.dumps(export_model(scaler, model, args.features, args.trace.name), indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"wrote {args.export}")
+        return
     if args.test:
         test_rows = json.loads(args.test.read_text(encoding="utf-8"))["rows"]
         result, scored = train_test(rows, test_rows, args.features)

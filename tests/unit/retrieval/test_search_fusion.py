@@ -105,3 +105,31 @@ def test_default_fusion_mode_is_signal() -> None:
     from metronix.core.config import Settings
 
     assert Settings().retrieval_fusion_mode == "signal"
+
+
+def test_learned_mode_scores_with_the_model(tmp_path) -> None:
+    import json
+
+    reranked, merged = _pool()
+    model = {
+        "feature_set": "static",
+        "mean": [0.0] * 8,
+        "scale": [1.0] * 8,
+        # graph presence only: the two graph candidates tie above the dense-only one
+        "coef": [0, 0, 0, 0, 0, 0, 0, 1.0],
+        "intercept": 0.0,
+    }
+    path = tmp_path / "model.json"
+    path.write_text(json.dumps(model))
+    with patch.object(search._s, "retrieval_fusion_model", str(path)):
+        fused = search._fused_scores("learned", "q", reranked, merged, {}, {}, "ws")
+    assert fused == {"a": 1.0, "b": 0.0, "c": 1.0}
+
+
+def test_learned_mode_falls_back_to_calibrated_without_a_model(tmp_path) -> None:
+    reranked, merged = _pool()
+    weights = {"rerank": 0.5, "dense": 0.25, "graph": 0.25}
+    with patch.object(search._s, "retrieval_fusion_model", str(tmp_path / "missing.json")):
+        learned = search._fused_scores("learned", "q", reranked, merged, {}, weights, "ws")
+    calibrated = search._fused_scores("calibrated", "q", reranked, merged, {}, weights, "ws")
+    assert learned == pytest.approx(calibrated)

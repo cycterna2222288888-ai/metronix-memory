@@ -52,7 +52,7 @@ GRAPH_MODES = {
 
 # Score-fusion strategies (METRONIX_RETRIEVAL_FUSION_MODE); "signal" is the production
 # default (compute_signal_score blended with the cross-encoder).
-FUSION_MODES = ("signal", "rrf", "calibrated", "bridge")
+FUSION_MODES = ("signal", "rrf", "calibrated", "bridge", "learned")
 
 RETRIEVAL_ONLY_ENV = {
     "QUERY_EXPANSION_ENABLED": "false",
