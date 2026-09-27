@@ -176,6 +176,14 @@ confirm half, and one deviation recorded:
   costs about 5 hours of CPU (the conditional cross-encoder pairs are 3-4x longer).
   "ppr+" `bridge` was run.
 
+**2Wiki (fixed before any 2Wiki end-to-end run)**: no selection on 2Wiki. All 1,000
+questions are held out with respect to the MuSiQue selection and are used to test
+transfer: first stage only, `off:signal`, `bfs:signal`, `off:calibrated`, "ppr+" under
+`signal`, `calibrated` and cross-encoder only, the no-graph cross-encoder-only control,
+and the MuSiQue-selected configuration if it is not among these. "ppr+" on 2Wiki uses
+the title-mention graph with the same settings (`specific`, `ranked`, anchors
+excluded). Primary comparison: MuSiQue-selected configuration vs `bfs:signal` on R@5.
+
 **PR criterion** (#497): the selected configuration beats `bfs:signal` on the confirm
 half with sign-test p < 0.05 on R@5, beats its own `off` control (the graph contributes),
 and does not lose to the cross-encoder-only control on the same channel.
