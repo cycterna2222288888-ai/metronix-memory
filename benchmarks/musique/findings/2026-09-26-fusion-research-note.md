@@ -630,6 +630,38 @@ What this slice does and does not show:
 - `learned` loses hop 0 in 2 of 30 questions (the dev slice: 140 vs 145 for
   `calibrated`); the model trades some first-hop precision for the second hop.
 
+### 5.11 Which half of "ppr+" carries the gain (ablation)
+
+"ppr+" changes two things at once: the subgraph (`SUBGRAPH=specific`) and the teleport
+(`TELEPORT=ranked`). Each was switched on alone, on the qwen2.5:3b slice of §5.10
+(30 questions, `ppr-novel`, same cross-encoder cache; a rerun of full "ppr+" after a
+machine restart reproduced every rank):
+
+| channel settings | R@5 `calibrated` | last hop @5 | R@5 `learned` | last hop @5 |
+| --- | --- | --- | --- | --- |
+| production (`paths`, `subgraph` teleport) | 70.0 | 12 | — | — |
+| `specific` only | 70.0 | 12 | 68.3 | 14 |
+| `seeds` teleport only | 73.3 | 14 | 76.7 | 18 |
+| `ranked` teleport only | 78.3 | 17 | 76.7 | 18 |
+| `specific` + `seeds` | 75.0 | 15 | 76.7 | 18 |
+| `specific` + `ranked` ("ppr+") | 80.0 | 18 | 78.3 | 19 |
+
+Paired, `calibrated`: `ranked` alone vs production +8.3 R@5 (5 wins / 0 losses, p = 0.063),
+`seeds` alone +3.3 (2 / 0), `specific` alone changes no question's top 5; adding
+`specific` to `ranked` +1.7 (2 / 1); `ranked` vs `seeds` +5.0 (3 / 0, p = 0.25).
+
+On this graph the teleport carries the gain and the subgraph adds almost nothing, which
+matches §5.10: with 535 passages the production subgraph is not cut. On the OpenIE graph
+(11,656 passages) the channel probe of §5.3 shows the opposite need, with the two
+settings interacting: with five anchors the next hop reaches the top 5 for 14 of 1,000
+questions in production, 42 with the `seeds` teleport alone, 21 with the `specific`
+subgraph alone and 192 with both, because the production subgraph holds the next hop
+for only 67 questions (737 with `specific`) and a uniform teleport over the larger
+subgraph drifts away from the seeds. So which half matters depends on the graph size;
+both stay on in the recommended configuration. The end-to-end ablation was not repeated
+on the MuSiQue confirm half; the 30-question differences between the teleport variants
+(1 to 3 questions) are within noise.
+
 ## 6. Negative and null results
 
 - **Equal-vote `rrf` with a noisy graph channel**: R@2 falls from 45.2 to 35.4 on the
@@ -706,5 +738,5 @@ The dev and qwen2.5:3b slices (§5.10) are built as in the handoff note (`conver
 `--graph llm` for `musique-llm`; set `GRAPH_EXTRACTION_LLM_TIMEOUT=900` or more on CPU,
 §5.9) and run with the same `pipeline_probe` commands without `--skip-graph-enrichment`.
 
-Per-question results of every run in §5.5-§5.7 and §5.10 (ranks of the gold passages,
+Per-question results of every run in §5.5-§5.7, §5.10 and §5.11 (ranks of the gold passages,
 no candidate dumps) are in `benchmarks/musique/results/2026-09-27/`.
