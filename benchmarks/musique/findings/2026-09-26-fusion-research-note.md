@@ -94,14 +94,20 @@ stronger second stage than anything in those pipelines.
 | `rrf` | `sum_c w_c / (60 + rank_c)` over cross-encoder, dense, graph, metadata rankings; one vote each | top by channel RRF |
 | `calibrated` | `0.5 * P_ce + 0.25 * dense/max + 0.25 * graph/max` | top by channel RRF |
 | `bridge` | `calibrated`, with each graph candidate's cross-encoder score replaced by `max(P_ce, P(anchor) * P(cand | q + anchor))`, anchor = best of the top-3 cross-encoder passages sharing an entity with it | top by channel RRF |
+| `learned` (added in this session, §5.6) | linear score of a logistic regression over 20 features per candidate: cross-encoder log-odds and reciprocal rank; dense and graph scores (pool-max normalised), reciprocal ranks and presence flags; and the top cross-encoder probability, its margin over the second and the graph channel's share of mass on its top candidate, each multiplied into the dense and graph features. Model file: `METRONIX_RETRIEVAL_FUSION_MODEL`, default `src/metronix/retrieval/fusion_models/default.json`, fitted on the MuSiQue tune half with "ppr+"; falls back to `calibrated` if no model loads | top by channel RRF |
 
-Weights were fixed before any measurement and are not tuned in this note.
+Weights of `rrf`, `calibrated` and `bridge` were fixed before any measurement and are not
+tuned in this note. `learned` is fitted on the tune half only; the features are computed
+by one function (`metronix.retrieval.fusion.learned_features`) for both fitting and
+serving, and the online pipeline reproduces the offline held-out numbers (R@5 62.80
+online vs 62.73 offline on the confirm half; the small difference comes from 2 questions
+with more than 35 candidates, where the online pool is chosen by channel RRF).
 
 ### 3.2 PPR channel settings (new in this session)
 
 | Setting | Values | Effect |
 | --- | --- | --- |
-| `METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT` | `subgraph` (default), `seeds` | teleport uniform over the subgraph's entities, or over the seed entities only |
+| `METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT` | `subgraph` (default), `seeds`, `ranked` | teleport uniform over the subgraph's entities; uniform over the seed entities; or seeds weighted by the dense rank of the anchors mentioning them (sum of `1 / rank ** power`, `_TELEPORT_RANK_POWER` = 1; query-named entities weigh 1), a cheap form of HippoRAG 2's dense-weighted reset vector |
 | `METRONIX_RETRIEVAL_GRAPH_PPR_SUBGRAPH` | `paths` (default), `specific` | `get_ppr_subgraph` (two-hop expansion cut at `MAX_NODES * 8` edges in traversal order) or `get_ppr_subgraph_specific` (documents of the least-mentioned seeds first, seeds above `HUB_CAP` skipped, up to `MAX_DOCS`) |
 | `METRONIX_RETRIEVAL_GRAPH_PPR_MAX_DOCS`, `_HUB_CAP` | 100, 200 | budget of `specific` |
 
