@@ -331,12 +331,64 @@ insignificant gain on the confirm half. Whatever the graph contributes has to be
 realised by the cross-encoder and a fusion that does not bury graph-only candidates,
 which is what the modes of §3.1 are for, and what §4 tests.
 
-### 5.5 End-to-end fusion, HippoRAG MuSiQue-1000 and 2Wiki-1000
+### 5.5 End-to-end: HippoRAG MuSiQue, tune half (500 questions)
 
-Not run: the models could not be downloaded in this container (see Status). Commands
-are in §8; the protocol is §4.
+Production pipeline (`pipeline_probe`, `k = 25`, query expansion and classifier off,
+`--skip-graph-enrichment`), cross-encoder `bge-reranker-v2-m3`, hybrid nomic-embed-text +
+SPLADE first stage. "Context" = the fragments handed to the answer model.
 
-### 5.6 Scaling defects found on the way (not fusion, but they block graph retrieval)
+| configuration | R@2 | R@5 | R@10 | last hop @5 | hop 0 @5 | both gold in context | last hop in context |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| no graph, calibrated | 46.5 | 61.0 | 67.7 | 254 | 418 | 223 | 337 |
+| ppr+, cross-encoder only | 46.1 | 60.6 | 68.8 | 234 | 427 | 271 | 375 |
+| ppr+, calibrated | 44.3 | 60.4 | 70.1 | 248 | 407 | 269 | 377 |
+| no graph, rrf | 45.2 | 60.0 | 68.6 | 248 | 410 | 223 | 338 |
+| no graph, cross-encoder only | 46.2 | 59.9 | 66.8 | 227 | 425 | 226 | 338 |
+| BFS (prod), rrf | 44.9 | 59.5 | 68.2 | 246 | 409 | 222 | 338 |
+| PPR -novel (prod), calibrated | 45.1 | 59.0 | 66.1 | 235 | 415 | 218 | 332 |
+| ppr+, signal | 45.7 | 59.0 | 69.0 | 223 | 418 | 242 | 353 |
+| PPR -novel (prod), rrf | 42.0 | 58.8 | 67.7 | 240 | 406 | 220 | 336 |
+| PPR (prod), rrf | 39.5 | 58.5 | 67.8 | 239 | 405 | 220 | 336 |
+| BFS (prod), signal | 45.6 | 58.4 | 68.1 | 221 | 415 | 226 | 340 |
+| ppr+, rrf | 35.4 | 58.4 | 71.7 | 242 | 387 | 277 | 383 |
+| no graph, signal | 45.6 | 58.3 | 68.0 | 220 | 415 | 225 | 339 |
+| PPR (prod), calibrated | 43.9 | 58.3 | 66.3 | 230 | 415 | 219 | 332 |
+| PPR -novel (prod), signal | 45.6 | 58.2 | 67.8 | 219 | 415 | 225 | 339 |
+| PPR (prod), signal | 45.6 | 58.2 | 67.8 | 219 | 415 | 225 | 339 |
+| no graph, no cross-encoder (first stage) | 40.1 | 52.5 | 64.3 | 211 | 362 | 220 | 333 |
+
+`bridge` under "ppr+" was stopped after 177 of the 500 questions for futility and cost:
+on those 177 it reached R@5 55.2 and R@2 37.1, against 58.9 / 42.7 for `off:calibrated`
+and 57.0 / 41.1 for "ppr+" `calibrated` on the same questions, with about 5 hours of CPU
+left (its conditional cross-encoder pairs are ~430 tokens). It is excluded from the
+selection; the partial rows are kept.
+
+Candidate pool (all merged candidates, i.e. what the cross-encoder sees):
+
+| channel | gold passages in pool | last hop in pool | graph-only gold passages |
+| --- | --- | --- | --- |
+| no graph (dense + SPLADE top 30) | 75.2% | 341 | — |
+| BFS (production) | 75.3% | 342 | 1 |
+| PPR, PPR -novel (production) | 75.2% | 341 | 0 |
+| "ppr+" | **80.9%** | **386** | **66** |
+
+**Selection** (pre-registered rule, highest tune R@5): `off:calibrated`, R@5 61.0: the
+fusion change *without* the graph. Tune-half paired comparisons (exploratory):
+
+| comparison | R@5 | last hop @5 | both gold in context |
+| --- | --- | --- | --- |
+| `off:calibrated` vs `off:signal` | +2.6 (CI 1.0 to 4.2, 68 / 35, p = 0.002) | +6.8 (49 / 15) | -0.4 (1 / 3) |
+| "ppr+" `calibrated` vs `off:calibrated` | -0.5 (52 / 65, p = 0.27) | -1.2 | **+9.2 (48 / 2, p < 0.0001)** |
+| "ppr+" `signal` vs `off:signal` | +0.6 (8 / 0, p = 0.008) | +0.6 | +3.4 (17 / 0) |
+
+Learned fusion (5-fold CV within the tune half, logistic regression): "ppr+" R@5 64.3
+(static features) / 64.9 (query-conditioned); no graph 61.9 / 61.8.
+
+### 5.6 End-to-end: confirm half and 2Wiki
+
+Pending.
+
+### 5.7 Scaling defects found on the way (not fusion, but they block graph retrieval)
 
 | Defect | Where | Effect on the HippoRAG MuSiQue graph | Status |
 | --- | --- | --- | --- |
