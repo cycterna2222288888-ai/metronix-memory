@@ -8,7 +8,9 @@ workspace and checks, per question, whether each gold paragraph is among the
 Only LLM calls are removed, so the probe needs no chat model and measures retrieval alone:
 
 * ``resolve_query`` and answer generation go through stubs (the resolver stub returns
-  nothing, which makes ``resolve_query`` fall back to the original question);
+  nothing, which makes ``resolve_query`` fall back to the original question), and the
+  team-workflow router (an LLM call for questions containing words like "process" or
+  "planning", which only changes the answer prompt) returns ``False``;
 * query expansion and the query classifier are switched off with their own settings
   (``QUERY_EXPANSION_ENABLED=false``, ``QUERY_CLASSIFIER_ENABLED=false``), so the dense
   query is the question itself and the scoring profile is ``mixed``.
@@ -251,6 +253,7 @@ def main() -> None:
     patches = [
         patch.object(search, "chat_completion", return_value=""),
         patch.object(search, "chat_completion_with_retry", return_value="(stub answer)"),
+        patch.object(search, "should_use_team_workflow_schema", return_value=False),
         patch.object(reranker, "rerank", _recording_rerank),
     ]
     if args.skip_graph_enrichment:
