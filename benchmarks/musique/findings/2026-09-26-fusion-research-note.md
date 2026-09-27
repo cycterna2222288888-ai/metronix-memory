@@ -392,6 +392,24 @@ Learned fusion (5-fold CV within the tune half, logistic regression): "ppr+" R@5
 
 ### 5.6 End-to-end: HippoRAG MuSiQue, confirm half (500 held-out questions)
 
+| configuration | R@2 | R@5 | R@10 | last hop @5 | hop 0 @5 | both gold in context | last hop in context |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ppr+, learned (online pipeline) | 46.9 | 62.8 | 73.5 | 248 | 425 | 289 | 388 |
+| ppr+, learned (offline replay of the signal dump) | 46.7 | 62.7 | 73.5 | 248 | 425 | 289 | 388 |
+| ppr+, calibrated | 45.9 | 61.9 | 72.6 | 249 | 415 | 274 | 374 |
+| no graph, learned (offline replay of the signal dump) | 47.2 | 60.5 | 67.7 | 221 | 430 | 225 | 334 |
+| no graph, calibrated | 47.0 | 60.0 | 68.0 | 222 | 423 | 220 | 326 |
+| ppr+, cross-encoder only | 47.4 | 59.6 | 68.3 | 215 | 427 | 268 | 369 |
+| no graph, cross-encoder only | 46.9 | 58.9 | 66.8 | 211 | 424 | 222 | 329 |
+| ppr+, signal | 47.5 | 58.8 | 68.1 | 208 | 427 | 233 | 339 |
+| BFS (prod), signal | 46.9 | 58.2 | 67.3 | 205 | 425 | 222 | 329 |
+| PPR (prod), signal | 47.0 | 58.1 | 67.1 | 204 | 425 | 220 | 327 |
+| no graph, signal | 47.0 | 58.1 | 67.2 | 204 | 425 | 221 | 328 |
+| no graph, no cross-encoder (first stage) | 39.9 | 52.3 | 63.2 | 191 | 373 | 216 | 323 |
+
+"Offline replay" rows rank the candidates of the `signal` dump with a model fitted on the
+tune half's dump of the same channel; "online" rows are `pipeline_probe --fusion learned`
+with the shipped model.
 
 Pre-registered comparisons (paired per question; bootstrap 95% CI; exact sign test):
 
@@ -428,11 +446,77 @@ Reading, with the caveats that belong to it:
   does. Whether that model transfers to another dataset is tested on 2Wiki below; a
   model fitted on one benchmark is the obvious overfitting risk.
 
-### 5.7 End-to-end: 2Wiki transfer (1,000 questions)
+### 5.7 End-to-end: 2Wiki transfer (1,000 questions, all held out)
 
-Pending.
+Nothing was selected or fitted on 2Wiki: the `learned` model is the one fitted on the
+MuSiQue tune half, and "ppr+" runs on the title-mention graph with the MuSiQue settings.
 
-### 5.8 Scaling defects found on the way (not fusion, but they block graph retrieval)
+| configuration | R@2 | R@5 | R@10 | last hop @5 | hop 0 @5 | both gold in context | last hop in context |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ppr+, learned (online pipeline) | 71.7 | 85.7 | 92.0 | 702 | 1000 | 897 | 930 |
+| ppr+, learned (offline replay of the signal dump) | 71.7 | 85.6 | 92.0 | 701 | 1000 | 895 | 928 |
+| ppr+, calibrated | 70.5 | 85.3 | 90.0 | 688 | 1000 | 827 | 869 |
+| ppr+, cross-encoder only | 66.2 | 74.3 | 80.8 | 487 | 999 | 812 | 863 |
+| ppr+, signal | 66.1 | 73.4 | 78.0 | 470 | 1000 | 636 | 673 |
+| no graph, learned (online; the ppr+ model with the graph channel off) | 66.9 | 72.7 | 76.3 | 457 | 1000 | 553 | 589 |
+| no graph, learned (offline replay of the signal dump) | 66.8 | 72.7 | 76.1 | 456 | 1000 | 551 | 586 |
+| no graph, calibrated | 66.4 | 72.5 | 76.2 | 454 | 1000 | 550 | 583 |
+| BFS (prod), signal | 65.7 | 71.8 | 75.3 | 439 | 1000 | 552 | 587 |
+| no graph, signal | 65.7 | 71.8 | 75.3 | 439 | 1000 | 552 | 587 |
+| no graph, no cross-encoder (first stage) | 64.8 | 71.5 | 75.2 | 437 | 997 | 543 | 576 |
+| no graph, cross-encoder only | 65.6 | 71.4 | 74.8 | 431 | 999 | 551 | 586 |
+
+| comparison (paired, 1,000 questions) | R@2 | R@5 | last hop @5 | both gold in context |
+| --- | --- | --- | --- | --- |
+| H1 transfer: `off:calibrated` vs `bfs:signal` | +0.7 (24 / 11, p = 0.041) | +0.7 (CI 0.0 to 1.35, 34 / 20, p = 0.076) | +1.5 (p = 0.049) | -0.2 |
+| `off:calibrated` vs cross-encoder-only control | +0.8 (p = 0.026) | +1.1 (46 / 22, p = 0.005) | +2.3 | -0.1 |
+| "ppr+" `calibrated` vs `off:calibrated` | +4.1 (123 / 47) | +12.8 (CI 11.4 to 14.1, 333 / 21) | +23.4 | +27.7 (278 / 1) |
+| **learned "ppr+" (online) vs `bfs:signal`** | **+6.0** (143 / 25) | **+13.8** (CI 12.5 to 15.1, **338 / 9**, p < 0.0001) | +26.3 | **+34.5** (349 / 4) |
+| learned "ppr+" vs learned without graph (online) | +4.8 | +13.0 (324 / 13) | +24.5 | +34.4 |
+| learned "ppr+" vs "ppr+" cross-encoder only | +5.5 | +11.4 (283 / 7) | +21.5 | +8.5 |
+
+By question type (R@5, production → learned "ppr+"): compositional 65.0 → 88.1 (413),
+inference 72.7 → 83.8 (108), bridge-comparison 54.3 → 67.1 (235), comparison 100 → 100
+(244, both entities are named in the question). The gain sits where a bridge is needed.
+
+On MuSiQue confirm the same breakdown by hop count (production / `off:calibrated` /
+learned "ppr+"): 2-hop 65.6 / 66.9 / 70.2 (257), 3-hop 55.9 / 58.2 / 60.6 (170), 4-hop
+38.0 / 39.7 / 41.8 (73).
+
+Caveat: the title-mention graph favours gold structurally (§5.2: 14.7% of gold passages
+isolated vs 60.1% of distractors), because 2Wiki's gold passages are the Wikipedia pages
+of entities linked by a Wikidata relation. HippoRAG's graph on 2Wiki has the same
+property (the gold pages name each other). The 2Wiki gain is real for this corpus but is
+larger than what a graph without that structure would give; MuSiQue (balanced OpenIE
+graph) is the conservative estimate.
+
+### 5.8 Against published numbers
+
+Passage R@5 (HippoRAG definition). Ours: MuSiQue on the confirm half (500 held-out
+questions; the tune half trained the learned model), 2Wiki on all 1,000.
+
+| System | first stage | MuSiQue R@5 | 2Wiki R@5 |
+| --- | --- | --- | --- |
+| Contriever | Contriever | 46.6 | 57.5 |
+| ColBERTv2 | ColBERTv2 | 49.2 | — |
+| HippoRAG | ColBERTv2 | 51.9 | 89.1 |
+| NV-Embed-v2 | NV-Embed-v2 (7B) | 69.7 | 76.5 |
+| HippoRAG 2 | NV-Embed-v2 + Llama-3.3-70B | 74.7 | 90.4 |
+| PropRAG | — | 78.3 | — |
+| BridgeRAG (LLM judge) | — | 81.5 | 95.3 |
+| Metronix first stage (nomic-embed-text 137M + SPLADE) | | 52.3 | 71.6 |
+| Metronix production (`bfs:signal`, + bge-reranker-v2-m3) | | 58.3 | 71.9 |
+| Metronix `off:calibrated` | | 60.0 | 72.5 |
+| **Metronix learned "ppr+"** | | **62.8** | **85.7** |
+
+In absolute terms Metronix stays below HippoRAG 2 on both sets and below plain
+NV-Embed-v2 on MuSiQue: the 137M embedder is the limit, not the fusion. The comparable
+quantity is the gain of graph fusion over the same system without it: HippoRAG 2 +5.0
+(MuSiQue) and +13.9 (2Wiki) over NV-Embed-v2; learned "ppr+" over learned without graph
++2.2 (MuSiQue confirm) and +13.0 (2Wiki), and over the production pipeline +4.5 and +13.8.
+None of these numbers is a new state of the art.
+
+### 5.9 Scaling defects found on the way (not fusion, but they block graph retrieval)
 
 | Defect | Where | Effect on the HippoRAG MuSiQue graph | Status |
 | --- | --- | --- | --- |
