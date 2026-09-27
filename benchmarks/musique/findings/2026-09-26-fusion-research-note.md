@@ -658,7 +658,14 @@ questions in production, 42 with the `seeds` teleport alone, 21 with the `specif
 subgraph alone and 192 with both, because the production subgraph holds the next hop
 for only 67 questions (737 with `specific`) and a uniform teleport over the larger
 subgraph drifts away from the seeds. So which half matters depends on the graph size;
-both stay on in the recommended configuration. The end-to-end ablation was not repeated
+both stay on in the recommended configuration. The production subgraph now logs
+`graph_ppr.subgraph_truncated` when it is cut. With the gold hop-0 passage as anchor
+(plus four of the question's distractors for five anchors), it was cut:
+- on the qwen2.5:3b graph in 0 of 30 queries with one or five anchors;
+- on the OpenIE graph in 74 of the first 100 confirm-half queries with one anchor and in
+  100 of 100 with five.
+
+How often a workspace logs this event tells whether `specific` changes its results. The end-to-end ablation was not repeated
 on the MuSiQue confirm half; the 30-question differences between the teleport variants
 (1 to 3 questions) are within noise.
 

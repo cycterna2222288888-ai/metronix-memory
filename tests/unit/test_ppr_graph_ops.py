@@ -101,6 +101,28 @@ def test_ppr_subgraph_limits_nodes_in_stable_order(mock_get_driver: MagicMock) -
     assert edges == [("entity:a", "document:a", 1.0)]
 
 
+@patch("metronix.storage.graph_ops.get_graph_driver")
+def test_ppr_subgraph_logs_truncation(mock_get_driver: MagicMock) -> None:
+    from structlog.testing import capture_logs
+
+    session = MagicMock()
+    session.run.return_value = [
+        _record("entity:z", None, ["Entity"], "document:z", "DOC-Z", ["Document"], "MENTIONS", 1),
+        _record("entity:a", None, ["Entity"], "document:a", "DOC-A", ["Document"], "MENTIONS", 1),
+    ]
+    mock_get_driver.return_value.session.return_value.__enter__.return_value = session
+
+    with capture_logs() as logs:
+        get_ppr_subgraph(["A"], "workspace-a", max_nodes=10)
+    assert not [e for e in logs if e["event"] == "graph_ppr.subgraph_truncated"]
+
+    with capture_logs() as logs:
+        get_ppr_subgraph(["A"], "workspace-a", max_nodes=2)
+    (event,) = [e for e in logs if e["event"] == "graph_ppr.subgraph_truncated"]
+    assert event["node_cap_hit"] is True
+    assert event["edge_limit"] == 16
+
+
 def _specific_session(seeds, seed_docs, doc_entities, aliases) -> MagicMock:
     """Session whose run() answers the four get_ppr_subgraph_specific queries."""
 

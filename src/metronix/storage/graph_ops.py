@@ -188,12 +188,15 @@ def get_ppr_subgraph(
     )
     nodes: dict[str, str | None] = {}
     edges: list[tuple[str, str, float]] = []
+    node_cap_hit = False
 
     def add_node(node_id: object, labels: object, doc_label: object) -> str | None:
+        nonlocal node_cap_hit
         if not isinstance(node_id, str) or not node_id:
             return None
         if node_id not in nodes:
             if len(nodes) >= max_nodes:
+                node_cap_hit = True
                 return None
             nodes[node_id] = document_label(labels, doc_label)
         return node_id
@@ -220,6 +223,18 @@ def get_ppr_subgraph(
             except (TypeError, ValueError):
                 weight = 1.0
         edges.append((left, right, weight))
+    if len(records) >= max_nodes * 8 or node_cap_hit:
+        # The cut follows the database's traversal order, not relevance; on a large
+        # graph this is where next-hop documents go missing (#497). A workspace that
+        # logs this often is one where SUBGRAPH=specific changes results.
+        logger.info(
+            "graph_ppr.subgraph_truncated",
+            workspace_id=workspace_id,
+            seeds=len(seed_names),
+            edges_loaded=len(records),
+            edge_limit=max_nodes * 8,
+            node_cap_hit=node_cap_hit,
+        )
     return nodes, edges
 
 

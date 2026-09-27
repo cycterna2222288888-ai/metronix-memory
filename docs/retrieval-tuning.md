@@ -84,6 +84,24 @@ METRONIX_RETRIEVAL_GRAPH_PPR_TELEPORT=ranked
 METRONIX_RETRIEVAL_FUSION_MODE=learned
 ```
 
+The two PPR settings are not one switch; what each contributes depends on the size of
+the workspace graph (note §5.11):
+
+- `TELEPORT=ranked` helped on both graphs measured. On a 535-passage graph it carried
+  the whole gain: +8.3 R@5 on its own, with `SUBGRAPH=specific` adding almost nothing.
+- `SUBGRAPH=specific` matters only where the production (`paths`) subgraph gets cut. It
+  is cut at `MAX_NODES * 8` edges in the database's traversal order, not by relevance.
+  - How often that happened: never on the 535-passage graph (0 of 30 queries); on the
+    11,656-passage graph in 74 of 100 queries with one anchor and 100 of 100 with five.
+  - On the large graph neither setting was enough alone: next hop in the channel's top
+    5 for 14 of 1,000 questions in production, 42 with the seed teleport alone, 21 with
+    `specific` alone, 192 with both.
+  - On the small graph `specific` changed no top 5, so turning it on there is harmless
+    but buys nothing.
+- To see which case a workspace is in, count `graph_ppr.subgraph_truncated` log events
+  (logged at info by the production subgraph). Rare events mean `specific` will not
+  change results; frequent events mean it should be on.
+
 The shipped `learned` model was fitted on benchmark questions (Wikipedia paragraphs),
 not on a Metronix workspace. Before enabling it for a workspace, run `make eval-compare`
 as above; `calibrated` is the fixed-weight alternative that needs no model.
