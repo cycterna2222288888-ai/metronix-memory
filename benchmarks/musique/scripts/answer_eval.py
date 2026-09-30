@@ -157,6 +157,19 @@ def ollama_chat(host: str, model: str, messages: list[dict], options: dict) -> d
         return json.load(resp)
 
 
+def prime(host: str, model: str, options: dict) -> None:
+    """Leave the fixed QA prefix (system + one-shot) in Ollama's KV cache.
+
+    Ollama reuses the cached prefix shared with the previous request, and with temperature
+    0 the output still depends on where that reuse stops (the pilot of 2026-09-30: 6 of 20
+    repeated prompts gave different text, 3 a different answer). Sending this primer
+    before every question makes the reused prefix the same for every prompt, so each
+    prompt has one answer whatever ran before it.
+    """
+    messages = qa_messages("", [])[:3] + [{"role": "user", "content": ""}]
+    ollama_chat(host, model, messages, {**options, "num_predict": 1})
+
+
 def _load_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -194,6 +207,7 @@ def read(args: Any) -> None:
                 resp = cache[key]
             else:
                 start = time.perf_counter()
+                prime(args.host, args.model, options)
                 reply = ollama_chat(args.host, args.model, messages, options)
                 resp = {
                     "key": key,
