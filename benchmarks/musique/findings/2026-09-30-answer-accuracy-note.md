@@ -114,3 +114,53 @@ within 0.5 points of #515 (A: 58.2 / 71.8, B: 62.8 / 85.7); any difference is re
 5. Stored in the repository: per question `{qid, answer, em, f1}` per configuration,
    gzipped JSONL (`results/2026-09-30/`). Responses, prompts and retrieved lists stay out
    (regenerable with the commands of this note).
+
+## 7. Amendments before the full run
+
+Date: 2026-10-01. Written after the 10-question pilot of §6.2 and before any full-run
+retrieval or reader call. The reader model, prompt, options (§3), metrics (§4) and
+analysis (§5) are unchanged.
+
+**A1. Reader determinism: KV-cache primer** (commit `ae2fca7`). Reason: in the pilot,
+the 20 reader prompts (10 questions x A, B) sent a second time without the answer cache
+gave a different response text for 6 of 20 and a different extracted answer for 3 of 20,
+although temperature is 0 and the seed fixed. Cause: Ollama reuses the KV-cache prefix a
+prompt shares with the previous request, and the output depends on where that reuse
+stops; on one prompt sent 8 times, the response was the same whenever the same request
+preceded it and different otherwise. Change: before every reader call `answer_eval.py`
+sends a fixed primer (the system message, the one-shot pair and an empty user turn,
+`num_predict 1`, reply discarded), so every prompt is evaluated on the same cached
+prefix. With it all 20 pilot prompts gave identical responses on repetition, also after an
+Ollama restart and in reverse order. The pilot answers produced before the fix were
+discarded without looking at their EM / F1; the answers produced with the primer are part
+of the full run, as §6.2 says.
+
+**A2. Retrieval is not bit-identical to #515.** Reason: the stack was rebuilt from
+scratch with Ollama 0.35.0 (nomic-embed-text digest `0a109f422b47`) instead of 0.34.4
+in #515. In the pilot the gold ranks were identical to #515 for 9 of 10 questions in both
+configurations (R@5 on the 10: A 52.5 = 52.5, B 59.17 = 59.17). The tenth,
+`4hop1__152562_5274_458768_33633`, differs below the top 5 only: one gold passage at rank
+17 instead of 18 under A and 24 instead of 25 under B; the gold positions in the top 5 are
+the same. Under B a tie in PPR scores (broken by Neo4j element ids, which change on
+reload, #515 §5.10) is a likely cause; under A there is no PPR channel, so there the
+difference has to come from the embeddings of the new Ollama version or from another tie
+in the ranking. Not investigated further. Only gold ranks can be checked, because #515
+stored no retrieved lists. Before any reader call, the full retrieval is compared with
+#515 per question (identical gold ranks; questions that differ; whether the difference
+reaches the top 5), and the reader runs only after the user's OK. As fixed in §2, the
+reader uses the re-run lists.
+
+**A3. Sample (decided by the user from the pilot timing).** The pilot projected about 34
+hours for the full run on 4 CPU cores (reader about 31 s per prompt; retrieval about 15 s
+per question for A, 5 s for B). Decision:
+
+- retrieval A and B on all questions (MuSiQue confirm 500, 2Wiki 1,000), in blocks of 50
+  questions; each block's per-question rows are gzipped when the block finishes, so an
+  interrupted run resumes at the next block;
+- reader on all 500 MuSiQue questions and on the **first 300 2Wiki questions in manifest
+  order**. H2 is tested on those 300. 2Wiki questions 301-1,000 serve only the retrieval
+  check of A2.
+- Power, from an a priori per-question SD of the F1 difference of 0.4 (not from pilot
+  data), 80% power: the smallest detectable mean F1 difference is about 6.5 points on 300
+  2Wiki questions (about 3.6 on 1,000) and about 5 points on 500 MuSiQue questions. A
+  null result on either set is weak evidence against a smaller effect.
