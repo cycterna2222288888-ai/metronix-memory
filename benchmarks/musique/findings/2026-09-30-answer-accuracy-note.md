@@ -191,3 +191,13 @@ Decision (user): accept the difference and proceed; no re-run with Ollama 0.34.4
 B are both read from the same re-run stack, so the A vs B comparison is unaffected; the
 re-run's own R@k is reported next to EM / F1. The 2Wiki check is added to this note when
 its retrieval finishes, before its reader run.
+
+**A5. Retrieval check on 2Wiki** (2026-10-01, before the 2Wiki reader run; same method
+and caveats as A4):
+
+| | gold ranks identical to #515 | differ | of which within the top 5 | of the first 300 (reader sample): differ / within top 5 | R@2 / R@5 re-run | R@2 / R@5 #515 |
+| --- | --- | --- | --- | --- | --- | --- |
+| A `bfs:signal` | 990 | 10 | 5 | 2 / 1 | 65.72 / 71.85 | 65.72 / 71.85 |
+| B learned "ppr+" | 973 | 27 | 8 | 7 / 1 | 71.78 / 85.70 | 71.67 / 85.65 |
+
+The reader runs on the re-run lists as decided in A4.
