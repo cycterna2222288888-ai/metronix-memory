@@ -164,3 +164,30 @@ per question for A, 5 s for B). Decision:
   data), 80% power: the smallest detectable mean F1 difference is about 6.5 points on 300
   2Wiki questions (about 3.6 on 1,000) and about 5 points on 500 MuSiQue questions. A
   null result on either set is weak evidence against a smaller effect.
+
+**A4. Retrieval check on the MuSiQue confirm half, and the decision to proceed**
+(2026-10-01, before any full-run reader call). The full re-run (500 questions, both
+configurations) was compared with #515 per question:
+
+| | gold ranks identical to #515 | differ | of which differ within the top 5 | R@2 / R@5 re-run | R@2 / R@5 #515 |
+| --- | --- | --- | --- | --- | --- |
+| A `bfs:signal` | 466 | 34 | 16 | 46.80 / 58.33 | 46.85 / 58.25 |
+| B learned "ppr+" | 468 | 32 | 16 | 46.72 / 62.87 | 46.90 / 62.80 |
+
+"Differ within the top 5" = a gold passage enters or leaves the top 5, or changes rank
+inside it; for those questions the reader's input differs from what #515's ranking would
+have given. Caveats:
+
+- #515 stored only the ranks of the gold passages, not the retrieved lists, so the check
+  covers gold ranks only; whether the non-gold passages of the top 5 match is unknown.
+- The cause is supported only indirectly: on the 34 questions that differ in either
+  configuration, the first stage alone (dense + SPLADE, no cross-encoder, no graph) gives
+  gold ranks that differ from #515's first-stage run (`confirm-dense_off_signal`) for 13,
+  so at least part of the difference comes before fusion and graph, which is consistent
+  with the embeddings of Ollama 0.35.0 (A2). It was not verified by re-running with
+  Ollama 0.34.4.
+
+Decision (user): accept the difference and proceed; no re-run with Ollama 0.34.4. A and
+B are both read from the same re-run stack, so the A vs B comparison is unaffected; the
+re-run's own R@k is reported next to EM / F1. The 2Wiki check is added to this note when
+its retrieval finishes, before its reader run.
