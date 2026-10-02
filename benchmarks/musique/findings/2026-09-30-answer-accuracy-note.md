@@ -201,3 +201,102 @@ and caveats as A4):
 | B learned "ppr+" | 973 | 27 | 8 | 7 / 1 | 71.78 / 85.70 | 71.67 / 85.65 |
 
 The reader runs on the re-run lists as decided in A4.
+
+## 8. Results
+
+Run 2026-10-01/02 under §2-§7 (reader on MuSiQue confirm 500 and 2Wiki first 300; all
+answers from `qwen2.5:3b` digest `357c53fb659c`, with the primer of A1). Per-question
+`{qid, answer, em, f1}` per configuration: `results/2026-09-30/`.
+
+### 8.1 Pre-registered tests (F1, sign test, Holm over the two)
+
+| | questions | F1 A `bfs:signal` | F1 B learned "ppr+" | B - A (bootstrap 95% CI) | wins / losses | sign-test p | Holm-adjusted p | holds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **H1** MuSiQue confirm | 500 | 22.71 | 26.76 | **+4.05** (0.81 to 7.30) | 122 / 79 | 0.0030 | **0.0059** | **yes** |
+| **H2** 2Wiki first 300 | 300 | 33.07 | 38.07 | +5.00 (-0.10 to 10.02) | 79 / 60 | 0.127 | 0.127 | no: not significant, CI includes zero |
+
+Secondary, EM (uncorrected):
+
+| | EM A | EM B | B - A (95% CI) | wins / losses | sign-test p |
+| --- | --- | --- | --- | --- | --- |
+| MuSiQue confirm | 12.40 | 15.20 | +2.80 (-0.40 to 6.00) | 40 / 26 | 0.11 |
+| 2Wiki first 300 | 19.00 | 22.67 | +3.67 (-1.67 to 9.00) | 38 / 27 | 0.21 |
+
+H1 holds: on held-out MuSiQue questions the learned "ppr+" configuration gives more
+correct answers than production with the same reader, +4.05 F1. H2 does not hold: on
+300 2Wiki questions the difference is **not significant, and its CI includes zero**
+(+5.0 F1, CI -0.10 to 10.02, p = 0.127). At 300 questions the a priori detectable effect was
+about 6.5 F1 points (A3); the result is consistent with a gain of that order or smaller
+and does not rule out zero. Neither test says anything about absolute quality against
+published systems (§5).
+
+### 8.2 Descriptive (not tested)
+
+Recall of the same re-run lists next to F1 (B - A):
+
+| | R@5 A | R@5 B | R@5 B - A | F1 B - A |
+| --- | --- | --- | --- | --- |
+| MuSiQue confirm (500) | 58.33 | 62.87 | +4.5 | +4.05 |
+| 2Wiki first 300 | 72.92 | 86.83 | +13.9 | +5.00 |
+
+On MuSiQue the F1 gain is about as large as the R@5 gain; on 2Wiki only about a third of
+the R@5 gain becomes F1 (see the post-hoc observation on bridge-comparison questions
+below; it is not established as the cause).
+
+MuSiQue by hop count (F1 A -> B): 2-hop (257) 27.5 -> 32.5 (+5.0); 3-hop (170) 17.6 ->
+22.0 (+4.4); 4-hop (73) 17.7 -> 17.7 (0.0). No gain on 4-hop questions.
+
+2Wiki by question type (F1 A -> B, wins / losses):
+
+| type | questions | F1 A | F1 B | B - A | wins / losses |
+| --- | --- | --- | --- | --- | --- |
+| compositional | 120 | 18.34 | 34.25 | +15.92 (CI 8.8 to 23.3) | 37 / 13 |
+| inference | 35 | 32.34 | 40.57 | +8.24 | 11 / 9 |
+| comparison | 76 | 43.09 | 44.24 | +1.15 | 19 / 18 |
+| bridge-comparison | 69 | 48.05 | 36.64 | **-11.41** (CI -23.4 to 0.7) | 12 / 20 |
+
+Post-hoc observations (subgroups chosen after seeing the data, uncorrected; not
+conclusions): the difference is largest on compositional questions, where #515 also
+found most of the R@5 gain. On bridge-comparison questions ("Which film's director was
+born first, X or Y?") B scores lower F1 than A (-11.4 on 69 questions, CI includes zero)
+although #515 reported higher R@5 for them. This was not investigated; one untested
+possibility is that B's top 5 holds the bridge passages but drops one of the two film
+passages the comparison needs. It is reported only because it offsets much of the
+compositional difference in the 2Wiki total.
+
+Checks: top 5 identical under A and B for 8 of 500 MuSiQue and 10 of 300 2Wiki questions
+(those get the same answer by construction); prompts answered from the cache: MuSiQue
+A 10 / B 18 (the 10 pilot questions plus the 8 identical lists), 2Wiki A 0 / B 10.
+Responses without `Answer:` (whole response scored): MuSiQue 10 / 12, 2Wiki 1 / 2;
+responses cut at `num_predict` 256: MuSiQue 14 / 12, 2Wiki 2 / 4.
+
+### 8.3 Limitations
+
+- One reader (a 3B quantised model, CPU, temperature 0); a stronger reader may turn more
+  or less of the recall gain into answers. Absolute EM / F1 are low and not comparable
+  with HippoRAG 2's (Llama-3.3-70B / GPT-4o-mini readers).
+- The reader sees the top 5 of the ranking, not the production context of up to 25
+  passages, so #515's "both gold passages in context" gain is not measured (§3).
+- Retrieval was re-run on a rebuilt stack and is not bit-identical to #515 (A2, A4, A5).
+- 2Wiki: 300 of 1,000 questions (A3), so H2 has low power; the 2Wiki title-mention graph
+  favours graph methods (#515 §5.2).
+- Holm covers the two primary tests only; the subgroup tables are uncorrected and
+  descriptive.
+
+### 8.4 Reproduce
+
+```bash
+# stack and data as in #515 §8 (Ollama: nomic-embed-text, qwen2.5:3b digest 357c53fb659c)
+benchmarks/musique/scripts/run_blocks.sh musique-hipporag <manifest_hipporag_confirm.jsonl> 500 \
+  <runs>/musique <ce_cache.jsonl>
+benchmarks/musique/scripts/run_blocks.sh wiki2-hipporag <manifest_2wiki.jsonl> 1000 \
+  <runs>/2wiki <ce_cache_2wiki.jsonl>
+benchmarks/musique/scripts/read_blocks.sh <runs>/musique 500 <manifest_hipporag_confirm.jsonl> \
+  <HippoRAG>/reproduce/dataset/musique.json <HippoRAG>/reproduce/dataset/musique_corpus.json mhr \
+  <prompt_cache.jsonl>
+benchmarks/musique/scripts/read_blocks.sh <runs>/2wiki 300 <manifest_2wiki.jsonl> \
+  <HippoRAG>/reproduce/dataset/2wikimultihopqa.json \
+  <HippoRAG>/reproduce/dataset/2wikimultihopqa_corpus.json w2h <prompt_cache_2wiki.jsonl>
+zcat <runs>/musique/answers_A_*.jsonl.gz > A.jsonl; zcat <runs>/musique/answers_B_*.jsonl.gz > B.jsonl
+python -m benchmarks.musique.scripts.answer_eval compare A.jsonl B.jsonl --manifest <manifest>
+```
