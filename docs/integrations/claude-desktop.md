@@ -68,7 +68,8 @@ Use `../../connecting_to_agent.md` when you want an agent to perform the setup s
 | --- | --- |
 | The bridge works against Metronix with this exact argument shape and `env` indirection | **Run.** `npx -y mcp-remote@0.14.3 http://localhost:8000/mcp --header "Authorization:${METRONIX_AUTH_HEADER}" --header "X-Agent-Id:my-agent"`, with `METRONIX_AUTH_HEADER` set in the environment, driven over stdio: `initialize` (server `MetronixMCP`, protocol `2025-03-26`), `tools/list` (22 tools, includes `metronix_memory_search`), and a `metronix_memory_search` call that returned a stored record. Against a stack built from `131d6b0` |
 | The JSON above parses | **Run.** `jq .` |
-| Claude Desktop config file locations, `command`/`args`/`env` format, restart requirement, log location | **Documentation only**: [Connect to local MCP servers](https://modelcontextprotocol.io/docs/develop/connect-local-servers). Claude Desktop itself was not run, so loading the bridge from the app is untested |
+| Claude Desktop with the config above | **Run.** Claude Desktop 2.31226.1 on macOS, `mcp-remote@0.14.3`, a personal `mtk_` key in `env`, against a stack built from `fix/docker-deps-lock` (URL `http://localhost:18000/mcp`, an isolated stack with a shifted port). After a full restart `metronix_status` answered, `metronix_memory_store` saved a record, and `metronix_memory_search` in a **new chat** found it |
+| Config file locations, `command`/`args`/`env` format, restart requirement, log location | **Documentation only**: [Connect to local MCP servers](https://modelcontextprotocol.io/docs/develop/connect-local-servers) |
 
 ## Troubleshooting
 

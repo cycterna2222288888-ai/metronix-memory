@@ -60,13 +60,16 @@ Create `.vscode/mcp.json` in the workspace (or open the user-level file with the
 | Server accepts `url`, `Authorization: Bearer mtk_…` and `X-Agent-Id` exactly as configured above | **Run.** `initialize`, `tools/list`, `metronix_memory_store`, `metronix_memory_search`, `metronix_memory_list` with those headers against a stack built from `131d6b0` |
 | Shared key cannot use `metronix_memory_*` | **Run.** `AUTH_REQUIRED` |
 | The JSON above parses | **Run.** `jq .` |
-| `.vscode/mcp.json` layout (`servers`, `type: http`, `headers`, `inputs` with `promptString` and `password: true`, `${input:id}`), user-config command, **MCP: List Servers**, trust prompt | **Documentation only**: [VS Code MCP servers](https://code.visualstudio.com/docs/copilot/customization/mcp-servers) and the [MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration). VS Code itself was not run |
+| VS Code itself | **Run, with a wrong key only so far.** VS Code 1.140.0 on macOS read the user-level `mcp.json` and sent the request, but the key it received was rejected with 401 and it fell back to OAuth (see Troubleshooting). A run with a correct key is not recorded yet |
+| `.vscode/mcp.json` layout (`servers`, `type: http`, `headers`, `inputs` with `promptString` and `password: true`, `${input:id}`), user-config command, **MCP: List Servers**, trust prompt | **Documentation only**: [VS Code MCP servers](https://code.visualstudio.com/docs/copilot/customization/mcp-servers) and the [MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) |
 
 ## Troubleshooting
 
 **MCP server not responding:** Verify the stack is running (`curl http://localhost:8000/health`).
 
-**HTTP 401 from `/mcp`:** The Bearer value is missing or wrong (an unknown `mtk_` key returns 401). Check the key you entered when the server started.
+**HTTP 401 from `/mcp`:** The Bearer value is missing or wrong (an unknown `mtk_` key returns 401). Check the key you entered when the server started. Metronix compares the key exactly: a trailing space or newline from a copy-paste is rejected.
+
+**VS Code opens a browser at `…/authorize?client_id=…` and shows `{"detail":"Not Found"}`:** Metronix has no OAuth endpoints. VS Code got a 401 on `/mcp`, found no OAuth metadata (`/.well-known/*` and `/register` return 404), and fell back to its OAuth sign-in. The `Authorization` header was sent but rejected. The server log shows `POST /mcp 401`; the VS Code log (**MCP: List Servers** → `metronix` → **Show Output**) shows `Received 401 status with Authorization header, retrying with new auth registration`. Close the browser tab, copy the key again without a trailing newline (`printf %s "$MTK" | pbcopy`), and enter it again. VS Code keeps the value it was given for an input `id`; if it keeps reusing the bad value, give the input a new `id` in `mcp.json` so that it prompts again.
 
 **`AUTH_REQUIRED` from `metronix_memory_*`:** You are using the shared `METRONIX_MCP_API_KEY`. Switch to a personal `mtk_` key.
 
