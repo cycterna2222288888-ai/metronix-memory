@@ -2,18 +2,45 @@ name: publish-image
 
 # Builds the core API image and pushes it to ghcr.io when a version tag is pushed.
 # Image: ghcr.io/<owner>/<repo> (lowercased by metadata-action).
-# Runs only on tags, so it never publishes from a branch or a pull request.
+# Publishing runs only on tags. Pull requests that touch the build inputs get a
+# build-only check (no push, no registry login).
 
 on:
   push:
     tags:
       - "v*"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "src/**"
+      - "migrations/**"
+      - "alembic.ini"
+      - ".github/workflows/publish-image.yml"
 
 permissions:
   contents: read
 
 jobs:
+  build-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha
+
   image:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
