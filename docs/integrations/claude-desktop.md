@@ -50,6 +50,7 @@ Add the `metronix` server:
   it as `${METRONIX_AUTH_HEADER}`, so the header value (which contains a space) is not split by
   the command line.
 - Write the headers as `Name:value` with no space after the colon.
+- Paste the key **without a trailing space or newline**: Metronix compares it exactly and returns 401 otherwise. The config file holds the key, so keep it out of version control (the Claude Desktop file lives in your user profile, outside any repository).
 - `X-Agent-Id` is a stable id you choose: 1–64 characters from `A–Z a–z 0–9 . _ -`. Use the same
   value as `agent_id` in memory tool arguments.
 - `mcp-remote` is pinned to `0.14.3`, the version this was tested with. `http://localhost` works
@@ -80,7 +81,7 @@ Claude Desktop writes MCP logs to `~/Library/Logs/Claude` (macOS) or `%APPDATA%\
 **Tools not appearing after registration:** Restart Claude Desktop after editing the config. Check
 that `npx` is on the `PATH` Claude Desktop sees.
 
-**HTTP 401:** The key in `METRONIX_AUTH_HEADER` is missing or wrong (an unknown `mtk_` key returns
+**HTTP 401, or a sign-in prompt:** The key in `METRONIX_AUTH_HEADER` is missing, wrong, revoked, or has a trailing space or newline (an unknown `mtk_` key returns 401). The value must start with `Bearer `. Metronix has no OAuth endpoints, so a sign-in prompt means the key was rejected. Test the key with `curl` as in the [VS Code guide](vscode-copilot.md#troubleshooting).
 401). The value must start with `Bearer `.
 
 **`AUTH_REQUIRED` from `metronix_memory_*`:** You are using the shared `METRONIX_MCP_API_KEY`. Switch to a personal `mtk_` key.
