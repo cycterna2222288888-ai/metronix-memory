@@ -430,6 +430,65 @@ class MemorySearchResult:
     rank: int = 0
 
 
+class SearchLegStatus(StrEnum):
+    OK = "ok"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class SearchFailureReason(StrEnum):
+    TIMEOUT = "timeout"
+    BACKEND_ERROR = "backend_error"
+
+
+class GraphHydrationStatus(StrEnum):
+    NOT_ATTEMPTED = "not_attempted"
+    OK = "ok"
+    PARTIAL = "partial"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class SearchLegHealth:
+    """Bounded retrieval diagnostics; unknown retryability is None."""
+
+    status: SearchLegStatus
+    reason: SearchFailureReason | None
+    retryable: bool | None
+
+
+@dataclass(frozen=True)
+class GraphHydrationHealth:
+    """Per-node resolution counts before filtering and ranking truncation."""
+
+    status: GraphHydrationStatus
+    retrieved: int
+    resolved: int
+    unavailable: int
+    invalid: int
+
+
+@dataclass(frozen=True)
+class GraphSearchLegHealth(SearchLegHealth):
+    hydration: GraphHydrationHealth
+
+
+@dataclass(frozen=True)
+class SearchLegsHealth:
+    qdrant: SearchLegHealth
+    graph: GraphSearchLegHealth
+    session: SearchLegHealth
+
+
+@dataclass(frozen=True)
+class MemorySearchOutcome:
+    """Ranked records plus request-local retrieval and hydration health."""
+
+    results: list[MemorySearchResult]
+    partial: bool
+    legs: SearchLegsHealth
+
+
 # ---------------------------------------------------------------------------
 # Freshness (PROJ-304)
 # ---------------------------------------------------------------------------
