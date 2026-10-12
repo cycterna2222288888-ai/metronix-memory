@@ -45,7 +45,7 @@ Full install (prerequisites, `.env`, ports, troubleshooting): **[install.md](ins
 
 ## Example in 5 minutes: store and find a memory
 
-Once the stack is up (the first image build takes 10–15 minutes), this takes a few minutes. Every command and output below was run against a stack built from commit `131d6b0`. It needs `curl` and `jq`, and is run from the repository root, where `.env` lives.
+Once the stack is up (the first image build takes 10–15 minutes), this takes a few minutes. The sample output below is from a manual run; IDs and scores will differ on your stack. It needs `curl` and `jq`, and is run from the repository root, where `.env` lives.
 
 **1. Check the stack.**
 
@@ -59,21 +59,6 @@ curl http://localhost:8000/health
 ```ini
 AUTH_PASSWORD=<your-password>
 ```
-
-> **Temporary workaround until the startup-migration failure is fixed (issue link to be added).** On images built from `131d6b0` the API's own startup migration fails with `No module named 'psycopg'` and only logs it, so `/health` stays green while most tables are missing. Until that is fixed, apply the migrations into a new database and point the API at it. Do this before the restart below, and remove it once the issue is closed:
->
-> ```bash
-> docker compose exec -T postgres psql -U metronix -d postgres \
->   -c "CREATE DATABASE metronix_qs OWNER metronix"
-> # CREATE DATABASE
-> docker compose exec -T -e POSTGRES_DB=metronix_qs metronix-core alembic upgrade head
-> # ...
-> # INFO  [alembic.runtime.migration] Running upgrade 033 -> 034, connections.sync_claim_id — ownership token for the 'syncing' lock.
-> docker compose exec -T -e POSTGRES_DB=metronix_qs metronix-core alembic current
-> # 034 (head)
-> ```
->
-> Then add `POSTGRES_DB=metronix_qs` to `.env`.
 
 Recreate only the API container so it picks up `.env`:
 
