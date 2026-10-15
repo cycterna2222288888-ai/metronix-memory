@@ -82,7 +82,6 @@ Claude Desktop writes MCP logs to `~/Library/Logs/Claude` (macOS) or `%APPDATA%\
 that `npx` is on the `PATH` Claude Desktop sees.
 
 **HTTP 401, or a sign-in prompt:** The key in `METRONIX_AUTH_HEADER` is missing, wrong, revoked, or has a trailing space or newline (an unknown `mtk_` key returns 401). The value must start with `Bearer `. Metronix has no OAuth endpoints, so a sign-in prompt means the key was rejected. Test the key with `curl` as in the [VS Code guide](vscode-copilot.md#troubleshooting).
-401). The value must start with `Bearer `.
 
 **`AUTH_REQUIRED` from `metronix_memory_*`:** You are using the shared `METRONIX_MCP_API_KEY`. Switch to a personal `mtk_` key.
 

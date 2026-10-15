@@ -54,13 +54,15 @@ curl http://localhost:8000/health
 # {"status":"ok"}
 ```
 
-**2. Set an admin password and restart the API.** Add a password for the built-in `admin@metronix.local` account (choose your own) to `.env`:
+**2. Set an admin password and restart the API.** On a **new installation** (empty users table), add a password for the built-in `admin@metronix.local` account (choose your own, at least 8 characters) to `.env`:
 
 ```ini
 AUTH_PASSWORD=<your-password>
 ```
 
-Recreate only the API container so it picks up `.env`:
+`AUTH_PASSWORD` only seeds the first admin: at startup the API creates `admin@metronix.local` when the users table is empty and does nothing otherwise. Changing it later does not change the password of an existing account. If you already have a running installation, skip the `.env` change and use your current admin credentials in step 3. To change the password of an existing account, an admin can send `PATCH /api/v1/users/{user_id}` with `{"password": "<new-password>"}` (admin token required, minimum 8 characters).
+
+On a new installation, recreate only the API container so it picks up `.env`:
 
 ```bash
 docker compose up -d --no-deps --force-recreate metronix-core
